@@ -1,0 +1,1 @@
+python visualize_saved_data.py inference_data/latest_inference

@@ -309,9 +309,9 @@ class AttentionProcessor:
         Returns:
             2D numpy array representing attention heatmap
         """
-        print(f"[AttentionProcessor] Getting attention heatmap for token at position {token_position}")
-        print(f"[AttentionProcessor] Vision token ranges: {self.vision_token_ranges}")
-        print(f"[AttentionProcessor] Patch mapping exists: {self.patch_mapping is not None}")
+        # print(f"[AttentionProcessor] Getting attention heatmap for token at position {token_position}")
+        # print(f"[AttentionProcessor] Vision token ranges: {self.vision_token_ranges}")
+        # print(f"[AttentionProcessor] Patch mapping exists: {self.patch_mapping is not None}")
         if self.patch_mapping:
             print(f"[AttentionProcessor] Patch mapping size: {len(self.patch_mapping)}")
         
@@ -328,7 +328,7 @@ class AttentionProcessor:
             print("[AttentionProcessor] ERROR: vision_attention is None")
             return None
         
-        print(f"[AttentionProcessor] Vision attention shape: {vision_attention.shape}")
+        # print(f"[AttentionProcessor] Vision attention shape: {vision_attention.shape}")
 
         # Create 2D attention map
         attention_map = self.create_attention_map(
@@ -341,7 +341,7 @@ class AttentionProcessor:
             print("[AttentionProcessor] ERROR: attention_map is None")
             return None
         
-        print(f"[AttentionProcessor] Created attention map with shape: {attention_map.shape}")
+        # print(f"[AttentionProcessor] Created attention map with shape: {attention_map.shape}")
 
         return attention_map
 

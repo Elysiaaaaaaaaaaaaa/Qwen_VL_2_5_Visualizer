@@ -79,3 +79,5 @@ temp/
 
 # local inference
 inference.py
+inference_data/
+cache/

@@ -591,9 +591,9 @@ def visualize_token_attention(
         
         step_key = absolute_token_position
         
-        print(f"Token index: {token_idx}, Input length: {input_length}, Absolute position: {absolute_token_position}")
-        print(f"Looking for attention at step key (sequence length): {step_key}")
-        print(f"Available step keys: {sorted(state.current_attention.keys())}")
+        # print(f"Token index: {token_idx}, Input length: {input_length}, Absolute position: {absolute_token_position}")
+        # print(f"Looking for attention at step key (sequence length): {step_key}")
+        # print(f"Available step keys: {sorted(state.current_attention.keys())}")
         
         # Get attention for this specific generation step
         if step_key not in state.current_attention:
@@ -634,7 +634,7 @@ def visualize_token_attention(
         # Get attention heatmap for each layer
         layer_attention_maps = {}
         for layer_idx in available_layers:
-            print(f"Getting attention heatmap for layer {layer_idx}...")
+            # print(f"Getting attention heatmap for layer {layer_idx}...")
             attention_map = state.current_processor.get_attention_heatmap_for_token(
                 step_attention,
                 token_position=absolute_token_position,

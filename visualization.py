@@ -45,7 +45,8 @@ class AttentionVisualizer:
         image: Union[Image.Image, np.ndarray],
         attention_map: np.ndarray,
         resize_to_image: bool = True,
-        return_pil: bool = True
+        return_pil: bool = True,
+        max_image_size: int = 1024  # 最大图像尺寸，超过将自动缩放
     ) -> Union[Image.Image, np.ndarray]:
         """
         Create a heatmap overlay on an image.
@@ -55,6 +56,7 @@ class AttentionVisualizer:
             attention_map: 2D attention map (grid_h, grid_w)
             resize_to_image: Whether to resize heatmap to match image size
             return_pil: Whether to return PIL Image (True) or numpy array (False)
+            max_image_size: Maximum image dimension (width or height) to reduce memory usage
 
         Returns:
             Image with heatmap overlay
@@ -70,6 +72,18 @@ class AttentionVisualizer:
             img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
         elif img_array.shape[-1] == 4:
             img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
+        
+        # 检查图像尺寸，如果超过max_image_size则自动缩放
+        height, width = img_array.shape[:2]
+        if max(width, height) > max_image_size:
+            # 计算缩放比例
+            scale_factor = max_image_size / max(width, height)
+            new_width = int(width * scale_factor)
+            new_height = int(height * scale_factor)
+            
+            # 缩放大图像以减少内存使用
+            img_array = cv2.resize(img_array, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+            print(f"Image resized from {width}x{height} to {new_width}x{new_height} to reduce memory usage")
 
         # Resize attention map to match image if requested
         if resize_to_image:
@@ -93,9 +107,14 @@ class AttentionVisualizer:
             attention_resized.max() - attention_resized.min() + 1e-8
         )
 
-        # Apply colormap
+        # Apply colormap with memory optimization
         cmap = cm.get_cmap(self.colormap)
+        
+        # 使用float32减少内存使用
+        attention_norm = attention_norm.astype(np.float32)
         heatmap_colored = cmap(attention_norm)
+        
+        # 直接转换为uint8以减少中间内存使用
         heatmap_rgb = (heatmap_colored[:, :, :3] * 255).astype(np.uint8)
 
         # Blend with original image
