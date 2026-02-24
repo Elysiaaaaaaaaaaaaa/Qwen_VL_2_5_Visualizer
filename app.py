@@ -632,6 +632,7 @@ def visualize_token_attention(
             print(f"  - Image grid THW: {state.current_processor.image_grid_thw}")
         
         # Get attention heatmap for each layer
+        # 这部分开始看不懂，state.current_processor.get_attention_heatmap_for_token
         layer_attention_maps = {}
         for layer_idx in available_layers:
             # print(f"Getting attention heatmap for layer {layer_idx}...")
