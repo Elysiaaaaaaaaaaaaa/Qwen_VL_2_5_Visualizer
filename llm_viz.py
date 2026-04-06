@@ -256,6 +256,19 @@ def main():
     try:
         image = Image.open(args.image)
         print(f"Image loaded successfully: {image.size} pixels")
+        
+        # Resize image: limit the longest edge to 512
+        max_edge = 512
+        width, height = image.size
+        if max(width, height) > max_edge:
+            if width >= height:
+                new_width = max_edge
+                new_height = int(height * (max_edge / width))
+            else:
+                new_height = max_edge
+                new_width = int(width * (max_edge / height))
+            image = image.resize((new_width, new_height), Image.LANCZOS)
+            print(f"Image resized to: {image.size} pixels (max edge: {max_edge})")
     except Exception as e:
         print(f"Error loading image: {str(e)}")
         return
