@@ -451,7 +451,7 @@ def main():
             print(f"No attention maps found for token {token_idx}")
             continue
         # 分析隐藏状态中的 Massive Activations
-        massive_dims, stats = find_massive_activation_dims(state.hidden_state, top_k=5)
+        all_massive_dims = analyze_all_layers_massive_activations(state, top_k=5)
         # 只显示模型整体对图片的注意力（Mean (All Layers)）
         if "Mean (All Layers)" in attention_maps:
             layer_name = "Mean (All Layers)"
