@@ -65,7 +65,6 @@ flagged/
 *.pt
 
 # Images (optional - comment out if you want to track example images)
-*.jpg
 *.jpeg
 *.png
 *.gif
