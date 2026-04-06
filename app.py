@@ -32,6 +32,7 @@ class ModelState:
         self.tokenizer = None
         self.extractor = None
         self.current_attention = None
+        self.hidden_state = None
         self.current_processor = None
         self.current_tokens = None
         self.current_image = None
@@ -44,6 +45,7 @@ class ModelState:
     def reset(self):
         """Reset generation-specific state."""
         self.current_attention = None
+        self.hidden_state = None
         self.current_processor = None
         self.current_tokens = None
         self.current_input_ids = None
@@ -202,7 +204,7 @@ def generate_with_attention(
         state.extractor.stop_extraction()
 
         # Get attention weights for ALL generation steps
-        state.current_attention = state.extractor.get_all_generation_steps()
+        state.current_attention, state.hidden_state = state.extractor.get_all_generation_steps()
         
         # Debug: Print extracted attention info
         # print(f"Extracted attention from {len(state.current_attention)} generation steps")

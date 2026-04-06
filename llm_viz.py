@@ -76,6 +76,20 @@ def save_inference_data(image_path: str, prompt: str, generated_text: str, state
                 pickle.dump(attention_data, f)
             metadata["attention_weights_path"] = "attention_weights.pkl"
         
+        # Save hidden states if available
+        if state.hidden_state is not None:
+            hidden_state_data = {}
+            for step_key, layer_data in state.hidden_state.items():
+                hidden_state_data[step_key] = {}
+                for layer_idx, hidden_state in layer_data.items():
+                    if hidden_state is not None:
+                        hidden_state_data[step_key][layer_idx] = hidden_state.cpu().numpy()
+            
+            hidden_state_path = os.path.join(save_path, "hidden_states.pkl")
+            with open(hidden_state_path, "wb") as f:
+                pickle.dump(hidden_state_data, f)
+            metadata["hidden_states_path"] = "hidden_states.pkl"
+        
         # Save metadata
         metadata_path = os.path.join(save_path, "metadata.json")
         with open(metadata_path, "w", encoding="utf-8") as f:
@@ -178,27 +192,27 @@ def verify_hidden_state_extraction(state):
         for step_key, step_data in state.current_attention.items():
             print(f"\n生成步骤 {step_key}:")
             
-            for layer_idx, layer_data in step_data.items():
-                if isinstance(layer_data, dict):
-                    if 'hidden_state' in layer_data:
-                        hidden_state = layer_data['hidden_state']
-                        if hidden_state is not None:
-                            print(f"  Layer {layer_idx}: hidden_state shape = {hidden_state.shape}")
-                        else:
-                            print(f"  Layer {layer_idx}: hidden_state = None")
-                    else:
-                        print(f"  Layer {layer_idx}: 没有 hidden_state 字段")
-                        
-                    if 'attention' in layer_data:
-                        attention = layer_data['attention']
-                        if attention:
-                            print(f"  Layer {layer_idx}: attention heads = {len(attention)}")
-                        else:
-                            print(f"  Layer {layer_idx}: attention = 空")
+            for layer_idx, head_data in step_data.items():
+                if isinstance(head_data, dict):
+                    print(f"  Layer {layer_idx}: attention heads = {len(head_data)}")
                 else:
-                    print(f"  Layer {layer_idx}: 数据格式不符合预期 (type: {type(layer_data)})")
+                    print(f"  Layer {layer_idx}: 数据格式不符合预期 (type: {type(head_data)})")
     else:
         print("没有找到注意力数据")
+    
+    if state.hidden_state is not None:
+        print(f"\n找到 {len(state.hidden_state)} 个生成步骤的 hidden state 数据")
+        
+        for step_key, layer_data in state.hidden_state.items():
+            print(f"\n生成步骤 {step_key}:")
+            
+            for layer_idx, hidden_state in layer_data.items():
+                if hidden_state is not None:
+                    print(f"  Layer {layer_idx}: hidden_state shape = {hidden_state.shape}")
+                else:
+                    print(f"  Layer {layer_idx}: hidden_state = None")
+    else:
+        print("没有找到 hidden state 数据")
     
     print("="*60 + "\n")
 

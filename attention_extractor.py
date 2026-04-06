@@ -115,22 +115,28 @@ class AttentionHook:
             'hidden_state': hidden_state
         }
     
-    def get_all_attention_weights(self) -> Dict[int, Dict[str, Any]]:
+    def get_all_attention_weights(self) -> Tuple[Dict[int, Dict[int, torch.Tensor]], Dict[int, torch.Tensor]]:
         """
         Get attention weights for all generation steps, organized by step then head.
         
         Returns:
-            Dictionary: {step: {'attention': {head_idx: attention_tensor}, 'hidden_state': hidden_state}}
+            Tuple of (attention_dict, hidden_state_dict):
+            - attention_dict: {step: {head_idx: attention_tensor}}
+            - hidden_state_dict: {step: hidden_state_tensor}
         """
-        all_attn = {}
+        attention_dict = {}
+        hidden_state_dict = {}
+        
         for (step, head_idx), attn in self.attention_weights.items():
-            if step not in all_attn:
-                all_attn[step] = {
-                    'attention': {},
-                    'hidden_state': self.hidden_states.get(step, None)
-                }
-            all_attn[step]['attention'][head_idx] = attn
-        return all_attn
+            if step not in attention_dict:
+                attention_dict[step] = {}
+            attention_dict[step][head_idx] = attn
+        
+        # Collect hidden states
+        for step, hidden in self.hidden_states.items():
+            hidden_state_dict[step] = hidden
+            
+        return attention_dict, hidden_state_dict
 
     def increment_step(self):
         """Increment the generation step counter."""
@@ -292,27 +298,35 @@ class AttentionExtractor:
         
         return attention_dict
     
-    def get_all_generation_steps(self) -> Dict[int, Dict[int, Dict[str, Any]]]:
+    def get_all_generation_steps(self) -> Tuple[Dict[int, Dict[int, Dict[int, torch.Tensor]]], Dict[int, Dict[int, torch.Tensor]]]:
         """
         Get attention weights for all generation steps.
         
         Returns:
-            Dictionary: {step: {layer_idx: {'attention': {head_idx: attention_tensor}, 'hidden_state': hidden_state}}}
+            Tuple of (attention_dict, hidden_state_dict):
+            - attention_dict: {step: {layer_idx: {head_idx: attention_tensor}}}
+            - hidden_state_dict: {step: {layer_idx: hidden_state_tensor}}
         """
         # First get all attention by step from hooks
-        all_steps_by_layer = {}
+        all_steps_attention = {}
+        all_steps_hidden = {}
+        
         for layer_idx, hook in self.hooks.items():
-            all_steps_by_layer[layer_idx] = hook.get_all_attention_weights()
+            layer_attention, layer_hidden = hook.get_all_attention_weights()
+            
+            # Organize attention by step
+            for step, head_dict in layer_attention.items():
+                if step not in all_steps_attention:
+                    all_steps_attention[step] = {}
+                all_steps_attention[step][layer_idx] = head_dict
+            
+            # Organize hidden states by step
+            for step, hidden in layer_hidden.items():
+                if step not in all_steps_hidden:
+                    all_steps_hidden[step] = {}
+                all_steps_hidden[step][layer_idx] = hidden
         
-        # Reorganize to {step: {layer: {head: attn}}}
-        all_steps = {}
-        for layer_idx, steps_dict in all_steps_by_layer.items():
-            for step, layer_data in steps_dict.items():
-                if step not in all_steps:
-                    all_steps[step] = {}
-                all_steps[step][layer_idx] = layer_data
-        
-        return all_steps
+        return all_steps_attention, all_steps_hidden
 
     def get_attention_for_token(
         self,
