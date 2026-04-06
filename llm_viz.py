@@ -212,6 +212,93 @@ def verify_hidden_state_extraction(state):
     print("="*60 + "\n")
 
 
+def find_massive_activation_dims(hidden_states_batch, top_k=3):
+    """
+    从隐藏状态中识别 Massive Activation Dimensions (大值激活维度/Spikes)。
+    
+    根据 LeCun 团队 2026 年研究 "The Spike, the Sparse and the Sink":
+    - Massive Activations 是某些维度激活值异常大 (Spikes)
+    - 通常由 FFN 的 SwiGLU 在前几个位置产生
+    - 经过 RMSNorm 后主导整个表示，是 Attention Sink 形成的前提
+    
+    Args:
+        hidden_states_batch: 形状 [Seq_Len, Hidden_Size] 的张量
+                            例如: 一批 token 的隐藏状态
+        top_k: 要返回的维度数量
+    
+    Returns:
+        top_dims: Top-K 大值激活维度的索引列表
+        stats: 统计信息字典
+    """
+    if not isinstance(hidden_states_batch, torch.Tensor):
+        hidden_states_batch = torch.tensor(hidden_states_batch)
+    
+    # 计算 RMS 归一化
+    rms = torch.sqrt(torch.mean(hidden_states_batch ** 2, dim=-1, keepdim=True))
+    rms = torch.clamp(rms, min=1e-8)
+    normalized = torch.abs(hidden_states_batch) / rms
+    
+    # 沿序列维度取最大值，得到每个维度的峰值激活
+    max_per_dim = torch.max(normalized, dim=0).values
+    
+    # 找激活值最大的维度 (Massive Activations / Spikes)
+    top_dims = torch.topk(max_per_dim, top_k, largest=True).indices
+    
+    print(f"发现的 Massive Activation Dimensions (大值激活维度): {top_dims.tolist()}")
+    
+    stats = {
+        'max_per_dim': max_per_dim,
+        'mean_activation': torch.mean(max_per_dim).item(),
+        'std_activation': torch.std(max_per_dim).item(),
+        'max_activation': torch.max(max_per_dim).item(),
+        'min_activation': torch.min(max_per_dim).item()
+    }
+    
+    return top_dims.tolist(), stats
+
+
+def analyze_all_layers_massive_activations(state, top_k=5):
+    """
+    分析所有层的 Massive Activations (大值激活维度)。
+    
+    根据 LeCun 团队 2026 年研究 "The Spike, the Sparse and the Sink":
+    Massive Activations 是由 FFN 的 SwiGLU 在前几个位置产生的极端异常值，
+    经过 RMSNorm 后主导整个表示，是 Attention Sink 形成的前提条件。
+    
+    Args:
+        state: 全局状态，包含 hidden_state 数据
+        top_k: 每层要返回的维度数量
+    
+    Returns:
+        all_massive_dims: 字典，键为层索引，值为该层的大值激活维度信息
+    """
+    print("\n" + "="*60)
+    print("分析所有层的 Massive Activations (大值激活维度)")
+    print("="*60)
+    
+    if state.hidden_state is None:
+        print("错误: 没有 hidden state 数据")
+        return None
+    
+    all_massive_dims = {}
+    
+    for layer_idx, hidden_state in state.hidden_state.items():
+        if hidden_state is not None:
+            print(f"\n--- Layer {layer_idx} ---")
+            massive_dims, stats = find_massive_activation_dims(hidden_state, top_k=top_k)
+            all_massive_dims[layer_idx] = {
+                'dims': massive_dims,
+                'stats': stats
+            }
+            print(f"  平均激活: {stats['mean_activation']:.4f}, "
+                  f"标准差: {stats['std_activation']:.4f}, "
+                  f"最大激活: {stats['max_activation']:.4f}")
+    
+    print("\n" + "="*60)
+    
+    return all_massive_dims
+
+
 # 设置参数解析器
 parser = argparse.ArgumentParser(description='Qwen2.5-VL Attention Visualization with OpenCV')
 parser.add_argument('--image', type=str, required=True, help='Path to input image')
@@ -335,13 +422,14 @@ def main():
     # 收集所有token的注意力图
     all_attention_maps = []
     
-    # 确定要可视化的token索引：prefill阶段(0)、第一个生成步(1)、最后一个token
+    # 确定要可视化的token索引
     num_tokens = len(state.current_tokens)
-    token_indices_to_visualize = []  # prefill和第一个生成步
+    # token_indices_to_visualize = [0, 1]  # prefill阶段(0)和第一个生成步(1) - 已注释
+    token_indices_to_visualize = []  # 只可视化最后一个token
     
-    # 添加最后一个token（如果不同于前两个）
+    # 添加最后一个token（如果存在）
     last_token_idx = num_tokens - 1
-    if last_token_idx > 1:
+    if last_token_idx >= 0:
         token_indices_to_visualize.append(last_token_idx)
     
     # 遍历指定的token
@@ -362,7 +450,8 @@ def main():
         if attention_maps is None:
             print(f"No attention maps found for token {token_idx}")
             continue
-        
+        # 分析隐藏状态中的 Massive Activations
+        massive_dims, stats = find_massive_activation_dims(state.hidden_state, top_k=5)
         # 只显示模型整体对图片的注意力（Mean (All Layers)）
         if "Mean (All Layers)" in attention_maps:
             layer_name = "Mean (All Layers)"
@@ -453,70 +542,70 @@ def main():
     
     # 6. 保存prompt tokens的注意力热力图
     # print("\nVisualizing prompt tokens attention...")
-    if state.current_prompt_tokens is not None and len(state.current_prompt_tokens) > 0:
-        # print(f"Found {len(state.current_prompt_tokens)} prompt tokens")
-        # print(f"Prompt tokens: {state.current_prompt_tokens}")
+    # if state.current_prompt_tokens is not None and len(state.current_prompt_tokens) > 0:
+    #     # print(f"Found {len(state.current_prompt_tokens)} prompt tokens")
+    #     # print(f"Prompt tokens: {state.current_prompt_tokens}")
         
-        # 可视化前几个prompt tokens的注意力
-        prompt_token_start = 13
-        prompt_token_end = 18
+    #     # 可视化前几个prompt tokens的注意力
+    #     prompt_token_start = 13
+    #     prompt_token_end = 18
         
-        prompt_attention_maps = visualize_prompt_attention(
-            token_start_idx=prompt_token_start,
-            token_end_idx=prompt_token_end,
-            aggregation_method=args.aggregation_method,
-            colormap=args.colormap,
-            alpha=args.alpha
-        )
+    #     prompt_attention_maps = visualize_prompt_attention(
+    #         token_start_idx=prompt_token_start,
+    #         token_end_idx=prompt_token_end,
+    #         aggregation_method=args.aggregation_method,
+    #         colormap=args.colormap,
+    #         alpha=args.alpha
+    #     )
         
-        if prompt_attention_maps is not None:
-            # 保存prompt tokens的平均注意力热力图
-            if "Mean (All Layers)" in prompt_attention_maps:
-                layer_name = "Mean (All Layers)"
-                attention_map = prompt_attention_maps[layer_name]
+    #     if prompt_attention_maps is not None:
+    #         # 保存prompt tokens的平均注意力热力图
+    #         if "Mean (All Layers)" in prompt_attention_maps:
+    #             layer_name = "Mean (All Layers)"
+    #             attention_map = prompt_attention_maps[layer_name]
                 
-                # 创建热力图叠加
-                heatmap_overlay = visualizer.create_heatmap_overlay(
-                    state.current_image,
-                    attention_map
-                )
+    #             # 创建热力图叠加
+    #             heatmap_overlay = visualizer.create_heatmap_overlay(
+    #                 state.current_image,
+    #                 attention_map
+    #             )
                 
-                # 转换PIL图像为OpenCV格式
-                cv_img = cv2.cvtColor(np.array(heatmap_overlay), cv2.COLOR_RGB2BGR)
+    #             # 转换PIL图像为OpenCV格式
+    #             cv_img = cv2.cvtColor(np.array(heatmap_overlay), cv2.COLOR_RGB2BGR)
                 
-                # 添加标题
-                title = f"Prompt Tokens {prompt_token_start}-{prompt_token_end} - {layer_name}"
-                cv2.putText(cv_img, title, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+    #             # 添加标题
+    #             title = f"Prompt Tokens {prompt_token_start}-{prompt_token_end} - {layer_name}"
+    #             cv2.putText(cv_img, title, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
                 
-                # 将OpenCV格式转换回PIL图像
-                pil_img = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
+    #             # 将OpenCV格式转换回PIL图像
+    #             pil_img = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
                 
-                # 保存热力图到./save目录
-                prompt_save_path = os.path.join(save_dir, f"prompt_tokens_{prompt_token_start}_{prompt_token_end}_heatmap.png")
-                try:
-                    pil_img.save(prompt_save_path)
-                    print(f"Prompt tokens热力图已保存: {prompt_save_path}")
-                except Exception as e:
-                    print(f"保存Prompt tokens热力图失败: {prompt_save_path}")
-                    print(f"Error: {str(e)}")
+    #             # 保存热力图到./save目录
+    #             prompt_save_path = os.path.join(save_dir, f"prompt_tokens_{prompt_token_start}_{prompt_token_end}_heatmap.png")
+    #             try:
+    #                 pil_img.save(prompt_save_path)
+    #                 print(f"Prompt tokens热力图已保存: {prompt_save_path}")
+    #             except Exception as e:
+    #                 print(f"保存Prompt tokens热力图失败: {prompt_save_path}")
+    #                 print(f"Error: {str(e)}")
                 
-                # # 显示图像
-                # cv2.imshow("Prompt Tokens Attention Heatmap", cv_img)
+    #             # # 显示图像
+    #             # cv2.imshow("Prompt Tokens Attention Heatmap", cv_img)
                 
-                # # 等待按键
-                # key = cv2.waitKey(0)
-                # if key == 27 or key == ord('q'):  # ESC或'q'键退出
-                #     cv2.destroyAllWindows()
-                #     return
-            else:
-                print(f"No attention maps found for prompt Mean (All Layers)")
-                pass
-        else:
-            print(f"No attention maps found for prompt tokens {prompt_token_start}-{prompt_token_end}")
-            pass
-    else:
-        print("No prompt tokens available for visualization")
-        pass
+    #             # # 等待按键
+    #             # key = cv2.waitKey(0)
+    #             # if key == 27 or key == ord('q'):  # ESC或'q'键退出
+    #             #     cv2.destroyAllWindows()
+    #             #     return
+    #         else:
+    #             print(f"No attention maps found for prompt Mean (All Layers)")
+    #             pass
+    #     else:
+    #         print(f"No attention maps found for prompt tokens {prompt_token_start}-{prompt_token_end}")
+    #         pass
+    # else:
+    #     print("No prompt tokens available for visualization")
+    #     pass
     
     # cv2.destroyAllWindows()
 
