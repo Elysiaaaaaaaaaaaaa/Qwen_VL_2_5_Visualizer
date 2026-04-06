@@ -107,36 +107,39 @@ class AttentionHook:
             if step == generation_step:
                 current_step_attn[head_idx] = attn
 
-        # Get hidden state for the same generation step
-        hidden_state = self.hidden_states.get(generation_step, None)
+        # Get the last hidden state (only one entry due to overwriting)
+        last_hidden_state = None
+        if self.hidden_states:
+            last_hidden_state = next(iter(self.hidden_states.values()))
 
         return {
             'attention': current_step_attn,
-            'hidden_state': hidden_state
+            'hidden_state': last_hidden_state
         }
     
-    def get_all_attention_weights(self) -> Tuple[Dict[int, Dict[int, torch.Tensor]], Dict[int, torch.Tensor]]:
+    def get_all_attention_weights(self) -> Tuple[Dict[int, Dict[int, torch.Tensor]], Optional[torch.Tensor]]:
         """
         Get attention weights for all generation steps, organized by step then head.
         
         Returns:
-            Tuple of (attention_dict, hidden_state_dict):
+            Tuple of (attention_dict, last_hidden_state):
             - attention_dict: {step: {head_idx: attention_tensor}}
-            - hidden_state_dict: {step: hidden_state_tensor}
+            - last_hidden_state: The last hidden state tensor (or None)
         """
         attention_dict = {}
-        hidden_state_dict = {}
         
         for (step, head_idx), attn in self.attention_weights.items():
             if step not in attention_dict:
                 attention_dict[step] = {}
             attention_dict[step][head_idx] = attn
         
-        # Collect hidden states
-        for step, hidden in self.hidden_states.items():
-            hidden_state_dict[step] = hidden
+        # Get the last hidden state (only one entry due to overwriting)
+        last_hidden_state = None
+        if self.hidden_states:
+            # Get the only value in hidden_states dict
+            last_hidden_state = next(iter(self.hidden_states.values()))
             
-        return attention_dict, hidden_state_dict
+        return attention_dict, last_hidden_state
 
     def increment_step(self):
         """Increment the generation step counter."""
@@ -298,21 +301,21 @@ class AttentionExtractor:
         
         return attention_dict
     
-    def get_all_generation_steps(self) -> Tuple[Dict[int, Dict[int, Dict[int, torch.Tensor]]], Dict[int, Dict[int, torch.Tensor]]]:
+    def get_all_generation_steps(self) -> Tuple[Dict[int, Dict[int, Dict[int, torch.Tensor]]], Dict[int, torch.Tensor]]:
         """
         Get attention weights for all generation steps.
         
         Returns:
-            Tuple of (attention_dict, hidden_state_dict):
+            Tuple of (attention_dict, last_hidden_state_dict):
             - attention_dict: {step: {layer_idx: {head_idx: attention_tensor}}}
-            - hidden_state_dict: {step: {layer_idx: hidden_state_tensor}}
+            - last_hidden_state_dict: {layer_idx: hidden_state} - only the last generation step
         """
         # First get all attention by step from hooks
         all_steps_attention = {}
-        all_steps_hidden = {}
+        last_hidden_states = {}
         
         for layer_idx, hook in self.hooks.items():
-            layer_attention, layer_hidden = hook.get_all_attention_weights()
+            layer_attention, last_hidden = hook.get_all_attention_weights()
             
             # Organize attention by step
             for step, head_dict in layer_attention.items():
@@ -320,13 +323,11 @@ class AttentionExtractor:
                     all_steps_attention[step] = {}
                 all_steps_attention[step][layer_idx] = head_dict
             
-            # Organize hidden states by step
-            for step, hidden in layer_hidden.items():
-                if step not in all_steps_hidden:
-                    all_steps_hidden[step] = {}
-                all_steps_hidden[step][layer_idx] = hidden
+            # Store the last hidden state for this layer
+            if last_hidden is not None:
+                last_hidden_states[layer_idx] = last_hidden
         
-        return all_steps_attention, all_steps_hidden
+        return all_steps_attention, last_hidden_states
 
     def get_attention_for_token(
         self,

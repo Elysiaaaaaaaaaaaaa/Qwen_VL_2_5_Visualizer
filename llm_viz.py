@@ -76,14 +76,12 @@ def save_inference_data(image_path: str, prompt: str, generated_text: str, state
                 pickle.dump(attention_data, f)
             metadata["attention_weights_path"] = "attention_weights.pkl"
         
-        # Save hidden states if available
+        # Save hidden states if available (only the last generation step)
         if state.hidden_state is not None:
             hidden_state_data = {}
-            for step_key, layer_data in state.hidden_state.items():
-                hidden_state_data[step_key] = {}
-                for layer_idx, hidden_state in layer_data.items():
-                    if hidden_state is not None:
-                        hidden_state_data[step_key][layer_idx] = hidden_state.cpu().numpy()
+            for layer_idx, hidden_state in state.hidden_state.items():
+                if hidden_state is not None:
+                    hidden_state_data[layer_idx] = hidden_state.cpu().numpy()
             
             hidden_state_path = os.path.join(save_path, "hidden_states.pkl")
             with open(hidden_state_path, "wb") as f:
@@ -201,16 +199,13 @@ def verify_hidden_state_extraction(state):
         print("没有找到注意力数据")
     
     if state.hidden_state is not None:
-        print(f"\n找到 {len(state.hidden_state)} 个生成步骤的 hidden state 数据")
+        print(f"\n找到最后一个生成步的 hidden state 数据（共 {len(state.hidden_state)} 层）")
         
-        for step_key, layer_data in state.hidden_state.items():
-            print(f"\n生成步骤 {step_key}:")
-            
-            for layer_idx, hidden_state in layer_data.items():
-                if hidden_state is not None:
-                    print(f"  Layer {layer_idx}: hidden_state shape = {hidden_state.shape}")
-                else:
-                    print(f"  Layer {layer_idx}: hidden_state = None")
+        for layer_idx, hidden_state in state.hidden_state.items():
+            if hidden_state is not None:
+                print(f"  Layer {layer_idx}: hidden_state shape = {hidden_state.shape}")
+            else:
+                print(f"  Layer {layer_idx}: hidden_state = None")
     else:
         print("没有找到 hidden state 数据")
     
@@ -340,8 +335,17 @@ def main():
     # 收集所有token的注意力图
     all_attention_maps = []
     
-    # 遍历所有生成的token
-    for token_idx in range(0, 2):
+    # 确定要可视化的token索引：prefill阶段(0)、第一个生成步(1)、最后一个token
+    num_tokens = len(state.current_tokens)
+    token_indices_to_visualize = []  # prefill和第一个生成步
+    
+    # 添加最后一个token（如果不同于前两个）
+    last_token_idx = num_tokens - 1
+    if last_token_idx > 1:
+        token_indices_to_visualize.append(last_token_idx)
+    
+    # 遍历指定的token
+    for token_idx in token_indices_to_visualize:
         # print(f"Visualizing attention for token {token_idx}: {state.current_tokens[token_idx]}")
         
         # 创建token选择器字符串
