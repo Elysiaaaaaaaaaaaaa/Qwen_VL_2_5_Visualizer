@@ -220,6 +220,39 @@ def normalize_attention(attention: torch.Tensor) -> torch.Tensor:
     return (attention - min_val) / (max_val - min_val)
 
 
+def threshold_denoise_attention_map(attention_map: np.ndarray, threshold: Optional[float] = None) -> np.ndarray:
+    """
+    Threshold denoise for a 2D attention heatmap (visualization-only).
+    
+    Rule:
+    - set all values < threshold to 0
+    
+    Behavior:
+    - If `config.ATTN_DENOISE_ENABLED` is False, returns input unchanged
+    - If threshold is None, uses `config.ATTN_DENOISE_MIN_VALUE` (default 0.05)
+    """
+    if attention_map is None:
+        return attention_map
+    if not getattr(config, "ATTN_DENOISE_ENABLED", False):
+        return attention_map
+
+    thr = float(getattr(config, "ATTN_DENOISE_MIN_VALUE", 0.05) if threshold is None else threshold)
+    if thr <= 0:
+        return attention_map
+
+    x = attention_map
+    if not isinstance(x, np.ndarray):
+        x = np.array(x, dtype=np.float32)
+    else:
+        x = x.astype(np.float32, copy=True)
+
+    if x.ndim != 2:
+        return x
+
+    x[x < thr] = 0.0
+    return x
+
+
 def resize_image_for_display(
     image: Image.Image,
     max_size: int = config.MAX_IMAGE_SIZE
@@ -377,17 +410,140 @@ def log_attention_info(
         return
 
     num_layers = len(attention_weights)
-    print(f"\n{'='*60}")
-    print(f"Attention Extraction Summary")
-    print(f"{'='*60}")
-    print(f"Number of layers: {num_layers}")
+    # print(f"\n{'='*60}")
+    # print(f"Attention Extraction Summary")
+    # print(f"{'='*60}")
+    # print(f"Number of layers: {num_layers}")
 
     for layer_idx in sorted(attention_weights.keys())[:3]:  # Show first 3 layers
         num_heads = len(attention_weights[layer_idx])
         first_head_shape = attention_weights[layer_idx][0].shape
-        print(f"Layer {layer_idx}: {num_heads} heads, shape: {first_head_shape}")
+        # print(f"Layer {layer_idx}: {num_heads} heads, shape: {first_head_shape}")
 
     if num_layers > 3:
-        print(f"... ({num_layers - 3} more layers)")
+        # print(f"... ({num_layers - 3} more layers)")
+        pass
 
-    print(f"{'='*60}\n")
+    # print(f"{'='*60}\n")
+
+
+def print_model_structure(model):
+    """
+    Print detailed model structure to identify attention types.
+    
+    This function examines the model architecture to identify:
+    - Self-attention layers
+    - Cross-attention layers (if any)
+    - Vision-language attention mechanisms
+    
+    Args:
+        model: Qwen2.5-VL model instance
+    """
+    # print("\n" + "="*80)
+    # print("Qwen2.5-VL Model Structure Analysis")
+    # print("="*80)
+    
+    # Check model type
+    model_type = type(model).__name__
+    # print(f"\nModel Type: {model_type}")
+    # print(f"Model Class: {type(model)}")
+    
+    # Check if it's a decoder-only model
+    # print("\n" + "-"*80)
+    # print("Language Model Architecture:")
+    # print("-"*80)
+    
+    if hasattr(model, 'model') and hasattr(model.model, 'language_model'):
+        lang_model = model.model.language_model
+        # print(f"Language Model Type: {type(lang_model)}")
+        
+        # Check for decoder layers
+        if hasattr(lang_model, 'layers'):
+            num_layers = len(lang_model.layers)
+            # print(f"Number of Layers: {num_layers}")
+            
+            # Examine first few layers for attention types
+            # print("\nExamining attention modules in first 3 layers:")
+            for layer_idx in range(min(3, num_layers)):
+                layer = lang_model.layers[layer_idx]
+                # print(f"\n  Layer {layer_idx}:")
+                # print(f"    Type: {type(layer)}")
+                
+                # Check for self-attention
+                if hasattr(layer, 'self_attn'):
+                    self_attn = layer.self_attn
+                    # print(f"    Self-Attention: {type(self_attn)}")
+                    # print(f"      - Module: {self_attn.__class__.__name__}")
+                    
+                    # Check attention attributes
+                    if hasattr(self_attn, 'attn'):
+                        # print(f"      - Has 'attn' attribute: {type(self_attn.attn)}")
+                        pass
+                    if hasattr(self_attn, 'q_proj'):
+                        # print(f"      - Has 'q_proj' attribute")
+                        pass
+                    if hasattr(self_attn, 'k_proj'):
+                        # print(f"      - Has 'k_proj' attribute")
+                        pass
+                    if hasattr(self_attn, 'v_proj'):
+                        # print(f"      - Has 'v_proj' attribute")
+                        pass
+                    if hasattr(self_attn, 'o_proj'):
+                        # print(f"      - Has 'o_proj' attribute")
+                        pass
+                
+                # Check for cross-attention
+
+                if hasattr(layer, 'cross_attn') or hasattr(layer, 'encoder_attn'):
+                    # print(f"    ⚠️  CROSS-ATTENTION FOUND!")
+                    if hasattr(layer, 'cross_attn'):
+                        # print(f"    Cross-Attention: {type(layer.cross_attn)}")
+                        pass
+                    if hasattr(layer, 'encoder_attn'):
+                        # print(f"    Encoder-Attention: {type(layer.encoder_attn)}")
+                        pass
+                else:
+                    # print(f"    No cross-attention found")
+                    pass
+            
+            if num_layers > 3:
+                # print(f"\n  ... ({num_layers - 3} more layers)")
+                pass
+    
+    # Check for vision model
+    # print("\n" + "-"*80)
+    # print("Vision Model Architecture:")
+    # print("-"*80)
+    
+    if hasattr(model, 'visual') or hasattr(model, 'vision_model'):
+        vision_attr = 'visual' if hasattr(model, 'visual') else 'vision_model'
+        vision_model = getattr(model, vision_attr)
+        # print(f"Vision Model Type: {type(vision_model)}")
+        # print(f"Vision Model: {vision_model.__class__.__name__}")
+    else:
+        # print("No separate vision model found (vision may be integrated)")
+        pass
+    
+    # Check for multi-modal projector
+    # print("\n" + "-"*80)
+    # print("Multi-modal Projector:")
+    # print("-"*80)
+    
+    if hasattr(model, 'mm_projector') or hasattr(model, 'multi_modal_projector'):
+        proj_attr = 'mm_projector' if hasattr(model, 'mm_projector') else 'multi_modal_projector'
+        projector = getattr(model, proj_attr)
+        # print(f"Projector Type: {type(projector)}")
+        # print(f"Projector: {projector.__class__.__name__}")
+    else:
+        # print("No explicit multi-modal projector found")
+        pass
+    
+    # Summary
+    # print("\n" + "="*80)
+    # print("SUMMARY:")
+    # print("="*80)
+    # print("✅ Qwen2.5-VL uses DECODER-ONLY architecture")
+    # print("✅ Vision and text tokens are MERGED into a single sequence")
+    # print("✅ All attention is SELF-ATTENTION (no cross-attention)")
+    # print("✅ Vision tokens and text tokens attend to each other via self-attention")
+    print("="*80 + "\n")

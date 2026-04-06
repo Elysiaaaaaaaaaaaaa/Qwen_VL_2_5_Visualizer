@@ -35,6 +35,7 @@ class AttentionHook:
         self.store_on_cpu = store_on_cpu
         self.use_float16 = use_float16
         self.attention_weights = {}
+        self.hidden_states = {}
         self.generation_step = 0
 
     def __call__(self, module, input, output):
@@ -49,7 +50,18 @@ class AttentionHook:
         # Output format: (attn_output, attn_weights) or just attn_output
         # For Qwen2.5-VL, we need to check if attention weights are returned
         if isinstance(output, tuple) and len(output) >= 2:
+            attn_output = output[0]  # This is the hidden state
             attn_weights = output[1]
+
+            # Store hidden state
+            if attn_output is not None:
+                if self.use_float16:
+                    attn_output = attn_output.half()
+                if self.store_on_cpu:
+                    attn_output = attn_output.cpu()
+                # Use key_len (total sequence length) to determine generation step
+                step_key = attn_output.shape[1]  # Shape: (batch_size, seq_len, hidden_dim)
+                self.hidden_states[step_key] = attn_output[0].clone()  # Store for batch 0
 
             if attn_weights is not None:
                 # Store attention weights
@@ -73,7 +85,7 @@ class AttentionHook:
                     key = (step_key, head_idx)
                     self.attention_weights[key] = attn_weights[0, head_idx].clone()
 
-    def get_attention_weights(self, generation_step: Optional[int] = None) -> Dict[int, torch.Tensor]:
+    def get_attention_weights(self, generation_step: Optional[int] = None) -> Dict[str, Any]:
         """
         Get stored attention weights for all heads at a specific generation step.
 
@@ -81,30 +93,43 @@ class AttentionHook:
             generation_step: Which generation step to retrieve (None = last step)
 
         Returns:
-            Dictionary mapping head_idx to attention tensor
+            Dictionary containing 'attention' (head_idx to attention tensor) and 'hidden_state'
         """
         if generation_step is None:
-            generation_step = self.generation_step
+            # Get the latest step by finding the maximum step_key
+            if self.attention_weights:
+                generation_step = max(step for step, _ in self.attention_weights.keys())
+            else:
+                generation_step = 0
             
         current_step_attn = {}
         for (step, head_idx), attn in self.attention_weights.items():
             if step == generation_step:
                 current_step_attn[head_idx] = attn
 
-        return current_step_attn
+        # Get hidden state for the same generation step
+        hidden_state = self.hidden_states.get(generation_step, None)
+
+        return {
+            'attention': current_step_attn,
+            'hidden_state': hidden_state
+        }
     
-    def get_all_attention_weights(self) -> Dict[int, Dict[int, torch.Tensor]]:
+    def get_all_attention_weights(self) -> Dict[int, Dict[str, Any]]:
         """
         Get attention weights for all generation steps, organized by step then head.
         
         Returns:
-            Dictionary: {step: {head_idx: attention_tensor}}
+            Dictionary: {step: {'attention': {head_idx: attention_tensor}, 'hidden_state': hidden_state}}
         """
         all_attn = {}
         for (step, head_idx), attn in self.attention_weights.items():
             if step not in all_attn:
-                all_attn[step] = {}
-            all_attn[step][head_idx] = attn
+                all_attn[step] = {
+                    'attention': {},
+                    'hidden_state': self.hidden_states.get(step, None)
+                }
+            all_attn[step]['attention'][head_idx] = attn
         return all_attn
 
     def increment_step(self):
@@ -112,8 +137,9 @@ class AttentionHook:
         self.generation_step += 1
 
     def reset(self):
-        """Clear stored attention weights."""
+        """Clear stored attention weights and hidden states."""
         self.attention_weights.clear()
+        self.hidden_states.clear()
         self.generation_step = 0
 
 
@@ -235,12 +261,12 @@ class AttentionExtractor:
         self._remove_hooks()
         self.disable_attention_output()
 
-    def get_attention_weights(self) -> Dict[int, Dict[int, torch.Tensor]]:
+    def get_attention_weights(self) -> Dict[int, Dict[str, Any]]:
         """
         Get all extracted attention weights from the last generation step.
 
         Returns:
-            Dictionary: {layer_idx: {head_idx: attention_tensor}}
+            Dictionary: {layer_idx: {'attention': {head_idx: attention_tensor}, 'hidden_state': hidden_state}}
         """
         attention_dict = {}
 
@@ -249,7 +275,7 @@ class AttentionExtractor:
 
         return attention_dict
     
-    def get_attention_for_generation_step(self, step: int) -> Dict[int, Dict[int, torch.Tensor]]:
+    def get_attention_for_generation_step(self, step: int) -> Dict[int, Dict[str, Any]]:
         """
         Get attention weights for a specific generation step.
         
@@ -257,7 +283,7 @@ class AttentionExtractor:
             step: Generation step index
             
         Returns:
-            Dictionary: {layer_idx: {head_idx: attention_tensor}}
+            Dictionary: {layer_idx: {'attention': {head_idx: attention_tensor}, 'hidden_state': hidden_state}}
         """
         attention_dict = {}
         
@@ -266,12 +292,12 @@ class AttentionExtractor:
         
         return attention_dict
     
-    def get_all_generation_steps(self) -> Dict[int, Dict[int, Dict[int, torch.Tensor]]]:
+    def get_all_generation_steps(self) -> Dict[int, Dict[int, Dict[str, Any]]]:
         """
         Get attention weights for all generation steps.
         
         Returns:
-            Dictionary: {step: {layer_idx: {head_idx: attention_tensor}}}
+            Dictionary: {step: {layer_idx: {'attention': {head_idx: attention_tensor}, 'hidden_state': hidden_state}}}
         """
         # First get all attention by step from hooks
         all_steps_by_layer = {}
@@ -281,10 +307,10 @@ class AttentionExtractor:
         # Reorganize to {step: {layer: {head: attn}}}
         all_steps = {}
         for layer_idx, steps_dict in all_steps_by_layer.items():
-            for step, heads_dict in steps_dict.items():
+            for step, layer_data in steps_dict.items():
                 if step not in all_steps:
                     all_steps[step] = {}
-                all_steps[step][layer_idx] = heads_dict
+                all_steps[step][layer_idx] = layer_data
         
         return all_steps
 
@@ -311,7 +337,8 @@ class AttentionExtractor:
             if layer_idx not in all_attention:
                 return None
 
-            layer_attention = all_attention[layer_idx]
+            layer_data = all_attention[layer_idx]
+            layer_attention = layer_data['attention']
 
             if head_idx is not None:
                 if head_idx not in layer_attention:
@@ -327,8 +354,9 @@ class AttentionExtractor:
         else:
             # Return attention from all layers and heads
             all_token_attention = []
-            for layer_attn in all_attention.values():
-                for head_attn in layer_attn.values():
+            for layer_data in all_attention.values():
+                layer_attention = layer_data['attention']
+                for head_attn in layer_attention.values():
                     all_token_attention.append(head_attn[token_position, :])
 
             if all_token_attention:
@@ -336,12 +364,12 @@ class AttentionExtractor:
             return None
 
     def reset(self):
-        """Reset all stored attention weights."""
+        """Reset all stored attention weights and hidden states."""
         for hook in self.hooks.values():
             hook.reset()
 
         if config.VERBOSE:
-            print("Reset all attention weights")
+            print("Reset all attention weights and hidden states")
 
     def __enter__(self):
         """Context manager entry."""

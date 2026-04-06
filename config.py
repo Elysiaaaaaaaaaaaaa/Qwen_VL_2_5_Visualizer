@@ -42,8 +42,8 @@ TOKEN_TO_PIXEL_SIZE = PATCH_FACTOR  # Each vision token = 28x28 pixel region
 # =============================================================================
 
 # Which layers to extract attention from
-EXTRACT_ALL_LAYERS = False  # Set to False to extract specific layers only
-SPECIFIC_LAYERS = [20, 21, 22, 23, 24]  # Last 5 layers (if EXTRACT_ALL_LAYERS=False)
+EXTRACT_ALL_LAYERS = True  # Set to False to extract specific layers only
+SPECIFIC_LAYERS = [30, 31, 32, 33, 34]  # Last 5 layers (if EXTRACT_ALL_LAYERS=False)
 
 # Attention storage
 STORE_ON_CPU = True  # Offload attention to CPU to save GPU memory
@@ -59,7 +59,7 @@ HEATMAP_ALPHA = 0.5  # Transparency of heatmap overlay (0-1)
 HEATMAP_INTERPOLATION = "bilinear"  # Options: 'nearest', 'bilinear', 'bicubic'
 
 # Default aggregation method
-DEFAULT_AGGREGATION = "mean"  # Options: 'mean', 'max', 'min'
+DEFAULT_AGGREGATION = "max"  # Options: 'mean', 'max', 'min'
 
 # Figure settings
 FIGURE_DPI = 150
@@ -127,6 +127,27 @@ LOG_ATTENTION_SHAPES = False  # Log attention tensor shapes (useful for debuggin
 # =============================================================================
 # Advanced Settings
 # =============================================================================
+
+# =============================================================================
+# Attention Denoise (post-processing, optional)
+# =============================================================================
+#
+# This denoise runs on the final 2D attention heatmap (grid_h x grid_w) right
+# before visualization. It does NOT affect model inference, only the displayed map.
+#
+# Threshold denoise (step 1):
+# - values < ATTN_DENOISE_MIN_VALUE will be reset to 0
+ATTN_DENOISE_ENABLED = False
+ATTN_DENOISE_MIN_VALUE = 0.05       # filter out values < 0.05 -> 0
+
+# Keep only strongest cells (optional)
+ATTN_DENOISE_KEEP_TOPK_RATIO = 1.0  # in (0, 1]; e.g. 0.15 keeps strongest 15%
+
+# Spatial smoothing (optional; set <= 1 to disable)
+ATTN_DENOISE_SMOOTH_KERNEL = 1      # e.g. 3 or 5
+
+# Re-normalize to [0, 1] after denoise (recommended)
+ATTN_DENOISE_RENORMALIZE = True
 
 # Attention rollout (experimental)
 USE_ATTENTION_ROLLOUT = False  # Combine attention across layers using rollout

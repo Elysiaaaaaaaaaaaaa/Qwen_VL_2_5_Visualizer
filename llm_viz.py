@@ -10,8 +10,9 @@ import shutil
 from datetime import datetime
 from app import load_model, generate_with_attention
 from app import state
-from app import visualize_token_attention
+from app import visualize_token_attention, visualize_prompt_token_attention
 from visualization import AttentionVisualizer
+import config
 from config import CACHE_DIR
 
 
@@ -79,7 +80,7 @@ def save_inference_data(image_path: str, prompt: str, generated_text: str, state
         metadata_path = os.path.join(save_path, "metadata.json")
         with open(metadata_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
-        print(f"[Save] Metadata saved to: {metadata_path}")
+        # print(f"[Save] Metadata saved to: {metadata_path}")
         
         # Save token information
         if state.current_tokens is not None:
@@ -88,13 +89,118 @@ def save_inference_data(image_path: str, prompt: str, generated_text: str, state
                 json.dump(state.current_tokens, f, ensure_ascii=False, indent=2)
             metadata["tokens_path"] = "tokens.json"
         
-        print(f"[Save] Inference data saved to: {save_path}")
+        # Save prompt token information if available
+        if state.current_prompt_tokens is not None:
+            prompt_tokens_path = os.path.join(save_path, "prompt_tokens.json")
+            with open(prompt_tokens_path, "w", encoding="utf-8") as f:
+                json.dump(state.current_prompt_tokens, f, ensure_ascii=False, indent=2)
+            metadata["prompt_tokens_path"] = "prompt_tokens.json"
+        
+        # print(f"[Save] Inference data saved to: {save_path}")
         
     except Exception as e:
-        error_msg = f"Error saving inference data: {str(e)}"
-        print(error_msg)
+        # error_msg = f"Error saving inference data: {str(e)}"
+        # print(error_msg)
         import traceback
         traceback.print_exc()
+
+
+def visualize_prompt_attention(token_start_idx: int, token_end_idx: int, aggregation_method: str, colormap: str, alpha: float):
+    """
+    Visualize attention from prompt text tokens to image regions.
+    
+    Args:
+        token_start_idx: Start token index (inclusive)
+        token_end_idx: End token index (inclusive)
+        aggregation_method: How to aggregate attention heads (mean/max/min)
+        colormap: Colormap name
+        alpha: Overlay transparency
+        
+    Returns:
+        Dictionary mapping layer names to attention heatmaps, or None if visualization failed
+    """
+    try:
+        # Check if attention data is available
+        if state.current_attention is None or state.current_processor is None:
+            # print("Error: No attention data available. Please generate text first.")
+            return None
+        
+        if state.current_prompt_tokens is None or len(state.current_prompt_tokens) == 0:
+            # print("Error: No prompt tokens available.")
+            return None
+        
+        # Get prompt token info
+        prompt_token_info = state.current_processor.get_prompt_text_token_info()
+        if not prompt_token_info:
+            # print("Error: No prompt token info available.")
+            return None
+        
+        # print(f"Visualizing prompt token range: {token_start_idx} to {token_end_idx}")
+        # print(f"Available prompt tokens: {len(state.current_prompt_tokens)}")
+        
+        # Call the original visualize_prompt_token_attention function
+        attention_maps = visualize_prompt_token_attention(
+            token_start_idx=token_start_idx,
+            token_end_idx=token_end_idx,
+            aggregation_method=aggregation_method,
+            colormap=colormap,
+            alpha=alpha
+        )
+        
+        if attention_maps is None:
+            # print("Error: Failed to generate attention maps for prompt tokens")
+            return None
+        
+        # print(f"Successfully generated attention maps for {len(attention_maps)} layers")
+        return attention_maps
+        
+    except Exception as e:
+        # print(f"Error in visualize_prompt_attention: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def verify_hidden_state_extraction(state):
+    """
+    Verify if hidden states are correctly extracted and print their shapes.
+    
+    Args:
+        state: Global state containing attention weights and hidden states
+    """
+    print("\n" + "="*60)
+    print("验证 Hidden State 提取")
+    print("="*60)
+    
+    if state.current_attention is not None:
+        print(f"找到 {len(state.current_attention)} 个生成步骤的注意力数据")
+        
+        for step_key, step_data in state.current_attention.items():
+            print(f"\n生成步骤 {step_key}:")
+            
+            for layer_idx, layer_data in step_data.items():
+                if isinstance(layer_data, dict):
+                    if 'hidden_state' in layer_data:
+                        hidden_state = layer_data['hidden_state']
+                        if hidden_state is not None:
+                            print(f"  Layer {layer_idx}: hidden_state shape = {hidden_state.shape}")
+                        else:
+                            print(f"  Layer {layer_idx}: hidden_state = None")
+                    else:
+                        print(f"  Layer {layer_idx}: 没有 hidden_state 字段")
+                        
+                    if 'attention' in layer_data:
+                        attention = layer_data['attention']
+                        if attention:
+                            print(f"  Layer {layer_idx}: attention heads = {len(attention)}")
+                        else:
+                            print(f"  Layer {layer_idx}: attention = 空")
+                else:
+                    print(f"  Layer {layer_idx}: 数据格式不符合预期 (type: {type(layer_data)})")
+    else:
+        print("没有找到注意力数据")
+    
+    print("="*60 + "\n")
 
 
 # 设置参数解析器
@@ -108,32 +214,45 @@ parser.add_argument('--temperature', type=float, default=0.8, help='Temperature 
 parser.add_argument('--top_p', type=float, default=0.95, help='Top-p sampling parameter')
 parser.add_argument('--colormap', type=str, default='jet', help='Colormap for heatmap visualization')
 parser.add_argument('--alpha', type=float, default=0.6, help='Alpha value for heatmap overlay')
-parser.add_argument('--aggregation_method', type=str, default='mean', choices=['mean', 'max', 'min'], help='Method to aggregate attention heads')
+parser.add_argument('--aggregation_method', type=str, default=config.DEFAULT_AGGREGATION, choices=['mean', 'max', 'min'], help='Method to aggregate attention heads')
 parser.add_argument('--layer_name', type=str, default=None, help='Specific layer to visualize (e.g., "Layer 0" or "Mean (All Layers)")')
 args = parser.parse_args()
 
 def main():
     # 清空cache文件夹
-    print(f"Clearing cache directory: {CACHE_DIR}")
+    # print(f"Clearing cache directory: {CACHE_DIR}")
     if os.path.exists(CACHE_DIR):
         shutil.rmtree(CACHE_DIR)
     os.makedirs(CACHE_DIR, exist_ok=True)
-    print("Cache directory cleared successfully")
+    # print("Cache directory cleared successfully")
+    
+    # 清空debug log文件
+    from attention_processor import AttentionProcessor
+    from pathlib import Path
+    log_file = Path(CACHE_DIR) / "attention_debug.log"
+    if log_file.exists():
+        log_file.unlink()
+    # print("Debug log file cleared successfully")
+    
+    # # 创建专门的目录来保存所有注意力可视化结果
+    # visualize_dir = os.path.join(os.getcwd(), "attention_visualizations")
+    # os.makedirs(visualize_dir, exist_ok=True)
+    # # print(f"Created visualization directory: {visualize_dir}")
     
     # 1. 加载模型
-    print(f"Loading model from: {args.model_path}")
+    # print(f"Loading model from: {args.model_path}")
     model_status = load_model(args.model_path)
     
     # 检查模型是否加载成功
     if "✗" in model_status or "Error" in model_status:
-        print(f"Model loading failed: {model_status}")
-        print("Please check the model path and try again.")
+        # print(f"Model loading failed: {model_status}")
+        # print("Please check the model path and try again.")
         return
     
-    print(f"Model loaded successfully: {model_status}")
+    # print(f"Model loaded successfully: {model_status}")
     
     # 2. 加载图像
-    print(f"Loading image from: {args.image}")
+    # print(f"Loading image from: {args.image}")
     try:
         image = Image.open(args.image)
         print(f"Image loaded successfully: {image.size} pixels")
@@ -156,8 +275,8 @@ def main():
         # 处理返回值
         generated_text, status, display_html = result[0], result[1], result[2]
         
-        print(f"Generated text: {generated_text}")
-        print(f"Status: {status}")
+        # print(f"Generated text: {generated_text}")
+        # print(f"Status: {status}")
         
         # 检查生成是否成功
         if "✗" in status or "Error" in status:
@@ -166,7 +285,10 @@ def main():
         
         # 保存推理数据
         save_inference_data(args.image, args.prompt, generated_text, state)
-        print("[Save] Inference data saved successfully!")
+        # print("[Save] Inference data saved successfully!")
+        
+        # 验证hidden_state是否被正确提取
+        verify_hidden_state_extraction(state)
     except Exception as e:
         print(f"Error during text generation: {str(e)}")
         import traceback
@@ -178,8 +300,12 @@ def main():
         print("No tokens generated, cannot visualize attention")
         return
     
-    # 5. 使用OpenCV展示注意力热力图
-    print(f"Visualizing attention for {len(state.current_tokens)} tokens...")
+    # 5. 保存注意力热力图到./save目录
+    # print(f"Visualizing attention for {len(state.current_tokens)} tokens...")
+    
+    # 创建保存目录
+    save_dir = os.path.join(os.getcwd(), "save")
+    os.makedirs(save_dir, exist_ok=True)
     
     # 创建注意力可视化器
     visualizer = AttentionVisualizer(colormap=args.colormap, alpha=args.alpha)
@@ -188,7 +314,7 @@ def main():
     all_attention_maps = []
     
     # 遍历所有生成的token
-    for token_idx in range(len(state.current_tokens)):
+    for token_idx in range(0, 2):
         # print(f"Visualizing attention for token {token_idx}: {state.current_tokens[token_idx]}")
         
         # 创建token选择器字符串
@@ -227,29 +353,36 @@ def main():
             title = f"Token {token_idx}: {state.current_tokens[token_idx]} - {layer_name}"
             cv2.putText(cv_img, title, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
             
-            # 将添加了标题的热力图保存到cache文件夹
-            cache_save_path = os.path.join(CACHE_DIR, f"token_{token_idx}_heatmap.png")
-            # 将OpenCV格式转换回PIL图像并保存
-            cv2.imwrite(cache_save_path, cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
-            print(f"Heatmap with title saved to cache: {cache_save_path}")
+            # 将OpenCV格式转换回PIL图像
+            pil_img = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
             
-            # 显示图像
-            cv2.imshow("Attention Heatmap", cv_img)
+            # 保存热力图到./save目录
+            save_path = os.path.join(save_dir, f"token_{token_idx}_heatmap.png")
+            try:
+                pil_img.save(save_path)
+                print(f"热力图已保存: {save_path}")
+            except Exception as e:
+                print(f"保存热力图失败: {save_path}")
+                print(f"Error: {str(e)}")
             
-            # 等待按键
-            key = cv2.waitKey(0)
-            if key == 27:  # ESC键退出
-                cv2.destroyAllWindows()
-                return
-            elif key == ord('q'):  # 'q'键退出
-                cv2.destroyAllWindows()
-                return
+            # # 显示图像
+            # cv2.imshow("Attention Heatmap", cv_img)
+            
+            # # 等待按键
+            # key = cv2.waitKey(0)
+            # if key == 27:  # ESC键退出
+            #     cv2.destroyAllWindows()
+            #     return
+            # elif key == ord('q'):  # 'q'键退出
+            #     cv2.destroyAllWindows()
+            #     return
         else:
-            print("No Mean (All Layers) attention map found")
+            # print("No Mean (All Layers) attention map found")
+            pass
     
-    # 显示所有token的平均注意力热力图
+    # 保存所有token的平均注意力热力图
     if len(all_attention_maps) > 0:
-        print("Generating average attention heatmap for all tokens...")
+        # print("Generating average attention heatmap for all tokens...")
         
         # 计算所有token的平均注意力
         avg_attention_map = np.mean(all_attention_maps, axis=0)
@@ -267,22 +400,94 @@ def main():
         avg_title = f"Average Attention for All {len(all_attention_maps)} Tokens - Mean (All Layers)"
         cv2.putText(avg_cv_img, avg_title, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
         
-        # 将添加了标题的平均热力图保存到cache文件夹
-        avg_cache_save_path = os.path.join(CACHE_DIR, "average_attention_heatmap.png")
-        # 将OpenCV格式转换回RGB并保存
-        cv2.imwrite(avg_cache_save_path, cv2.cvtColor(avg_cv_img, cv2.COLOR_BGR2RGB))
-        print(f"Average heatmap with title saved to cache: {avg_cache_save_path}")
+        pil_avg_img = Image.fromarray(cv2.cvtColor(avg_cv_img, cv2.COLOR_BGR2RGB))
         
-        # 显示图像
-        cv2.imshow("Attention Heatmap", avg_cv_img)
+        # 保存热力图到./save目录
+        avg_save_path = os.path.join(save_dir, "average_attention_heatmap.png")
+        try:
+            pil_avg_img.save(avg_save_path)
+            print(f"平均注意力热力图已保存: {avg_save_path}")
+        except Exception as e:
+            print(f"保存平均注意力热力图失败: {avg_save_path}")
+            print(f"Error: {str(e)}")
         
-        # 等待按键
-        key = cv2.waitKey(0)
-        if key == 27 or key == ord('q'):  # ESC或'q'键退出
-            cv2.destroyAllWindows()
-            return
+        # # 显示图像
+        # cv2.imshow("Attention Heatmap", avg_cv_img)
+        
+        # # 等待按键
+        # key = cv2.waitKey(0)
+        # if key == 27 or key == ord('q'):  # ESC或'q'键退出
+        #     cv2.destroyAllWindows()
+        #     return
     
-    cv2.destroyAllWindows()
+    # 6. 保存prompt tokens的注意力热力图
+    # print("\nVisualizing prompt tokens attention...")
+    if state.current_prompt_tokens is not None and len(state.current_prompt_tokens) > 0:
+        # print(f"Found {len(state.current_prompt_tokens)} prompt tokens")
+        # print(f"Prompt tokens: {state.current_prompt_tokens}")
+        
+        # 可视化前几个prompt tokens的注意力
+        prompt_token_start = 13
+        prompt_token_end = 18
+        
+        prompt_attention_maps = visualize_prompt_attention(
+            token_start_idx=prompt_token_start,
+            token_end_idx=prompt_token_end,
+            aggregation_method=args.aggregation_method,
+            colormap=args.colormap,
+            alpha=args.alpha
+        )
+        
+        if prompt_attention_maps is not None:
+            # 保存prompt tokens的平均注意力热力图
+            if "Mean (All Layers)" in prompt_attention_maps:
+                layer_name = "Mean (All Layers)"
+                attention_map = prompt_attention_maps[layer_name]
+                
+                # 创建热力图叠加
+                heatmap_overlay = visualizer.create_heatmap_overlay(
+                    state.current_image,
+                    attention_map
+                )
+                
+                # 转换PIL图像为OpenCV格式
+                cv_img = cv2.cvtColor(np.array(heatmap_overlay), cv2.COLOR_RGB2BGR)
+                
+                # 添加标题
+                title = f"Prompt Tokens {prompt_token_start}-{prompt_token_end} - {layer_name}"
+                cv2.putText(cv_img, title, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                
+                # 将OpenCV格式转换回PIL图像
+                pil_img = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
+                
+                # 保存热力图到./save目录
+                prompt_save_path = os.path.join(save_dir, f"prompt_tokens_{prompt_token_start}_{prompt_token_end}_heatmap.png")
+                try:
+                    pil_img.save(prompt_save_path)
+                    print(f"Prompt tokens热力图已保存: {prompt_save_path}")
+                except Exception as e:
+                    print(f"保存Prompt tokens热力图失败: {prompt_save_path}")
+                    print(f"Error: {str(e)}")
+                
+                # # 显示图像
+                # cv2.imshow("Prompt Tokens Attention Heatmap", cv_img)
+                
+                # # 等待按键
+                # key = cv2.waitKey(0)
+                # if key == 27 or key == ord('q'):  # ESC或'q'键退出
+                #     cv2.destroyAllWindows()
+                #     return
+            else:
+                print(f"No attention maps found for prompt Mean (All Layers)")
+                pass
+        else:
+            print(f"No attention maps found for prompt tokens {prompt_token_start}-{prompt_token_end}")
+            pass
+    else:
+        print("No prompt tokens available for visualization")
+        pass
+    
+    # cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     main()

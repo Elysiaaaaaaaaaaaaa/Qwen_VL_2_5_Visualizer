@@ -73,7 +73,7 @@ def load_model(model_path: str):
         return "✗ Please enter a valid model path!"
 
     try:
-        print(f"Loading model: {model_path}")
+        # print(f"Loading model: {model_path}")
         state.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             model_path,
             torch_dtype=config.MODEL_TORCH_DTYPE,
@@ -81,7 +81,7 @@ def load_model(model_path: str):
             attn_implementation="eager"  # Required for output_attentions support
         )
 
-        print(f"Loading processor: {model_path}")
+        # print(f"Loading processor: {model_path}")
         state.processor = AutoProcessor.from_pretrained(model_path)
         state.tokenizer = state.processor.tokenizer
 
@@ -94,15 +94,15 @@ def load_model(model_path: str):
 
         # Get actual model architecture info
         num_layers = len(state.model.model.language_model.layers)
-        print(f"Model architecture: {num_layers} layers")
-        print(f"Target layers for attention extraction: {state.extractor.target_layers}")
+        # print(f"Model architecture: {num_layers} layers")
+        # print(f"Target layers for attention extraction: {state.extractor.target_layers}")
 
-        print("Model loaded successfully!")
+        # print("Model loaded successfully!")
         return f"✓ Model loaded successfully from {model_path}! ({num_layers} layers)"
 
     except Exception as e:
-        error_msg = f"Error loading model: {str(e)}"
-        print(error_msg)
+        # error_msg = f"Error loading model: {str(e)}"
+        # print(error_msg)
         return f"✗ {error_msg}"
 
 
@@ -187,7 +187,7 @@ def generate_with_attention(
         state.current_image_grid_thw = inputs.get("image_grid_thw")
 
         # Generate with attention extraction
-        print("Generating with attention extraction...")
+        # print("Generating with attention extraction...")
         state.extractor.start_extraction()
 
         with torch.no_grad():
@@ -205,24 +205,24 @@ def generate_with_attention(
         state.current_attention = state.extractor.get_all_generation_steps()
         
         # Debug: Print extracted attention info
-        print(f"Extracted attention from {len(state.current_attention)} generation steps")
+        # print(f"Extracted attention from {len(state.current_attention)} generation steps")
         if state.current_attention:
             step_keys = sorted(state.current_attention.keys())
-            print(f"Step keys (sequence lengths): {step_keys}")
+            # print(f"Step keys (sequence lengths): {step_keys}")
             
             sample_step = step_keys[0]
             sample_layer = list(state.current_attention[sample_step].keys())[0]
             num_layers = len(state.current_attention[sample_step])
             num_heads = len(state.current_attention[sample_step][sample_layer])
             
-            print(f"Layer indices: {sorted(state.current_attention[sample_step].keys())}")
-            print(f"Number of heads per layer: {num_heads}")
+            # print(f"Layer indices: {sorted(state.current_attention[sample_step].keys())}")
+            # print(f"Number of heads per layer: {num_heads}")
             
             # Show attention shape for each step
-            print(f"\nAttention shapes by step:")
+            # print(f"\nAttention shapes by step:")
             for step in step_keys[:min(5, len(step_keys))]:  # Show first 5 steps
                 sample_attn = state.current_attention[step][sample_layer][0]
-                print(f"  Step {step}: {sample_attn.shape}")
+                # print(f"  Step {step}: {sample_attn.shape}")
 
         # Decode output
         generated_ids = output_ids[0][inputs["input_ids"].shape[1]:]
@@ -239,6 +239,12 @@ def generate_with_attention(
             generated_ids.tolist(),
             state.tokenizer
         )
+        
+        # # Add prefill prompt tokens to the beginning of current_tokens
+        # # This allows visualization of attention for all tokens including prefill
+        # if state.current_prompt_tokens:
+        #     state.current_tokens = state.current_prompt_tokens + state.current_tokens
+        #     print(f"Added {len(state.current_prompt_tokens)} prefill tokens to current_tokens")
 
         # Create attention processor
         state.current_processor = AttentionProcessor(
@@ -253,27 +259,27 @@ def generate_with_attention(
         prompt_token_info = state.current_processor.get_prompt_text_token_info()
         if prompt_token_info:
             state.current_prompt_tokens = [text for _, text in prompt_token_info]
-            print(f"Extracted {len(state.current_prompt_tokens)} prompt text tokens")
+            # print(f"Extracted {len(state.current_prompt_tokens)} prompt text tokens")
 
         # Log info
         if config.VERBOSE:
             # Log attention info for new data structure
-            print(f"\n{'='*60}")
-            print(f"Attention Extraction Summary")
-            print(f"{'='*60}")
-            print(f"Number of generation steps: {len(state.current_attention)}")
+            # print(f"\n{'='*60}")
+            # print(f"Attention Extraction Summary")
+            # print(f"{'='*60}")
+            # print(f"Number of generation steps: {len(state.current_attention)}")
             if state.current_attention:
                 first_step = min(state.current_attention.keys())
                 first_step_data = state.current_attention[first_step]
-                print(f"Number of layers: {len(first_step_data)}")
+                # print(f"Number of layers: {len(first_step_data)}")
                 sample_layer = list(first_step_data.keys())[0]
-                print(f"Number of heads: {len(first_step_data[sample_layer])}")
+                # print(f"Number of heads: {len(first_step_data[sample_layer])}")
                 sample_head = list(first_step_data[sample_layer].keys())[0]
-                print(f"Sample attention shape: {first_step_data[sample_layer][sample_head].shape}")
-            print(f"{'='*60}\n")
+                # print(f"Sample attention shape: {first_step_data[sample_layer][sample_head].shape}")
+            # print(f"{'='*60}\n")
             
             info = state.current_processor.get_sequence_info()
-            print(f"Sequence info: {info}")
+            # print(f"Sequence info: {info}")
 
         status = f"✓ Generated {len(generated_ids)} tokens successfully!"
         
@@ -302,7 +308,7 @@ def generate_with_attention(
 
     except Exception as e:
         error_msg = f"Error during generation: {str(e)}"
-        print(error_msg)
+        # print(error_msg)
         import traceback
         traceback.print_exc()
         error_html = "<p style='color: red;'>Error during generation</p>"
@@ -336,11 +342,11 @@ def visualize_token_range_attention(
         Dictionary mapping layer names to attention heatmaps
     """
     if state.current_attention is None or state.current_processor is None:
-        print("Error: No attention data available. Please generate text first.")
+        # print("Error: No attention data available. Please generate text first.")
         return None
     
     if token_start_idx < 0 or token_end_idx < 0:
-        print("Error: Invalid token range")
+        # print("Error: Invalid token range")
         return None
     
     try:
@@ -349,8 +355,8 @@ def visualize_token_range_attention(
         # Get available step keys
         available_steps = sorted(state.current_attention.keys())
         
-        print(f"Visualizing token range: {token_start_idx} to {token_end_idx}")
-        print(f"Input length: {input_length}")
+        # print(f"Visualizing token range: {token_start_idx} to {token_end_idx}")
+        # print(f"Input length: {input_length}")
         
         # Collect attention maps per layer for all tokens in range
         # layer_attention_maps[layer_idx] = list of attention maps for this layer across tokens
@@ -401,10 +407,10 @@ def visualize_token_range_attention(
                 token_texts.append(state.current_tokens[token_idx])
         
         if not layer_attention_maps:
-            print("ERROR: No attention maps generated for the token range")
+            # print("ERROR: No attention maps generated for the token range")
             return None
         
-        print(f"Successfully generated attention maps for {len(layer_attention_maps)} layers")
+        # print(f"Successfully generated attention maps for {len(layer_attention_maps)} layers")
         
         # Average attention maps across tokens for each layer
         layer_averaged_maps = {}
@@ -421,11 +427,11 @@ def visualize_token_range_attention(
             result_dict[f"Layer {layer_idx}"] = layer_averaged_maps[layer_idx]
         result_dict["Mean (All Layers)"] = all_layers_mean
         
-        print(f"Visualization created successfully! Generated attention maps for {len(result_dict)} layers")
+        # print(f"Visualization created successfully! Generated attention maps for {len(result_dict)} layers")
         return result_dict
         
     except Exception as e:
-        print(f"Error in visualization: {str(e)}")
+        # print(f"Error in visualization: {str(e)}")
         import traceback
         traceback.print_exc()
         return None
@@ -453,26 +459,26 @@ def visualize_prompt_token_attention(
         Dictionary mapping layer names to attention heatmaps
     """
     if state.current_attention is None or state.current_processor is None:
-        print("Error: No attention data available. Please generate text first.")
+        # print("Error: No attention data available. Please generate text first.")
         return None
     
     if state.current_prompt_tokens is None or len(state.current_prompt_tokens) == 0:
-        print("Error: No prompt tokens available.")
+        # print("Error: No prompt tokens available.")
         return None
     
     # Get prompt token info
     prompt_token_info = state.current_processor.get_prompt_text_token_info()
     if not prompt_token_info:
-        print("Error: No prompt token info available.")
+        # print("Error: No prompt token info available.")
         return None
     
     try:
-        print(f"Visualizing prompt token range: {token_start_idx} to {token_end_idx}")
+        # print(f"Visualizing prompt token range: {token_start_idx} to {token_end_idx}")
         
         # Get available step keys - use the first step (prefill)
         available_steps = sorted(state.current_attention.keys())
         if not available_steps:
-            print("ERROR: No attention steps available")
+            # print("ERROR: No attention steps available")
             return None
         
         prefill_step = available_steps[0]
@@ -481,15 +487,15 @@ def visualize_prompt_token_attention(
         # Get available layers and heads
         available_layers = sorted(step_attention.keys())
         if not available_layers:
-            print("ERROR: No layers available")
+            # print("ERROR: No layers available")
             return None
         
         sample_layer = available_layers[0]
         available_heads = sorted(step_attention[sample_layer].keys())
         
         print(f"Using prefill step: {prefill_step}")
-        print(f"Available layers: {available_layers}")
-        print(f"Available heads: {available_heads}")
+        # print(f"Available layers: {available_layers}")
+        # print(f"Available heads: {available_heads}")
         
         # Collect attention maps per layer for all prompt tokens in range
         layer_attention_maps = {}
@@ -520,10 +526,10 @@ def visualize_prompt_token_attention(
                     layer_attention_maps[layer_idx].append(attention_map)
         
         if not layer_attention_maps:
-            print("ERROR: No attention maps generated for the prompt token range")
+            # print("ERROR: No attention maps generated for the prompt token range")
             return None
         
-        print(f"Successfully generated attention maps for {len(layer_attention_maps)} layers")
+        # print(f"Successfully generated attention maps for {len(layer_attention_maps)} layers")
         
         # Average attention maps across tokens for each layer
         layer_averaged_maps = {}
@@ -540,11 +546,11 @@ def visualize_prompt_token_attention(
             result_dict[f"Layer {layer_idx}"] = layer_averaged_maps[layer_idx]
         result_dict["Mean (All Layers)"] = all_layers_mean
         
-        print(f"Visualization created successfully! Generated attention maps for {len(result_dict)} layers")
+        # print(f"Visualization created successfully! Generated attention maps for {len(result_dict)} layers")
         return result_dict
         
     except Exception as e:
-        print(f"Error in prompt token visualization: {str(e)}")
+        # print(f"Error in prompt token visualization: {str(e)}")
         import traceback
         traceback.print_exc()
         return None
@@ -571,18 +577,18 @@ def visualize_token_attention(
     """
     # Check if generation has been done
     if state.current_attention is None or state.current_processor is None:
-        print("Error: No attention data available. Please generate text first.")
+        # print("Error: No attention data available. Please generate text first.")
         return None
 
     # Check if a token is selected
     if token_selector is None or token_selector == "":
-        print("Error: No token selected. Please select a token from the dropdown.")
+        # print("Error: No token selected. Please select a token from the dropdown.")
         return None
 
     try:
         # Extract token index from selector string
         # Format: "Token {i}: '{tok}'"
-        print(f"Visualizing token: {token_selector}")
+        # print(f"Visualizing token: {token_selector}")
         token_idx = int(token_selector.split(":")[0].split()[-1])
 
         # Adjust token position (account for input tokens)
@@ -597,15 +603,15 @@ def visualize_token_attention(
         
         # Get attention for this specific generation step
         if step_key not in state.current_attention:
-            print(f"ERROR: Step key {step_key} not found in attention data")
+            # print(f"ERROR: Step key {step_key} not found in attention data")
             # Try to find the closest step
             available_keys = sorted(state.current_attention.keys())
             if available_keys:
                 closest_key = min(available_keys, key=lambda x: abs(x - step_key))
-                print(f"Using closest available step: {closest_key}")
+                # print(f"Using closest available step: {closest_key}")
                 step_attention = state.current_attention[closest_key]
             else:
-                print("ERROR: No attention data available")
+                # print("ERROR: No attention data available")
                 return None
         else:
             step_attention = state.current_attention[step_key]
@@ -613,23 +619,24 @@ def visualize_token_attention(
         # Get available layers and heads from this step
         available_layers = sorted(step_attention.keys())
         if not available_layers:
-            print("ERROR: No attention data available")
+            # print("ERROR: No attention data available")
             return None
         
         sample_layer = available_layers[0]
         available_heads = sorted(step_attention[sample_layer].keys())
         
-        print(f"Available layers: {available_layers}")
-        print(f"Available heads: {available_heads}")
+        # print(f"Available layers: {available_layers}")
+        # print(f"Available heads: {available_heads}")
 
         # Debug processor info
-        print(f"Processor info:")
-        print(f"  - Has patch_mapping: {state.current_processor.patch_mapping is not None}")
-        print(f"  - Has image_grid_thw: {state.current_processor.image_grid_thw is not None}")
-        print(f"  - Vision token ranges: {state.current_processor.vision_token_ranges}")
+        # print(f"Processor info:")
+        # print(f"  - Has patch_mapping: {state.current_processor.patch_mapping is not None}")
+        # print(f"  - Has image_grid_thw: {state.current_processor.image_grid_thw is not None}")
+        # print(f"  - Vision token ranges: {state.current_processor.vision_token_ranges}")
         
         if state.current_processor.image_grid_thw is not None:
-            print(f"  - Image grid THW: {state.current_processor.image_grid_thw}")
+            pass
+            # print(f"  - Image grid THW: {state.current_processor.image_grid_thw}")
         
         # Get attention heatmap for each layer
         # 这部分开始看不懂，state.current_processor.get_attention_heatmap_for_token
@@ -649,14 +656,14 @@ def visualize_token_attention(
                 layer_attention_maps[layer_idx] = attention_map
 
         if not layer_attention_maps:
-            print("ERROR: No attention map generated")
-            print("Possible causes:")
-            print("  1. No vision tokens found in sequence")
-            print("  2. Patch mapping failed")
-            print("  3. Token position out of range")
+            # print("ERROR: No attention map generated")
+            # print("Possible causes:")
+            # print("  1. No vision tokens found in sequence")
+            # print("  2. Patch mapping failed")
+            # print("  3. Token position out of range")
             return None
 
-        print(f"Generated attention maps for {len(layer_attention_maps)} layers")
+        # print(f"Generated attention maps for {len(layer_attention_maps)} layers")
         
         # Calculate mean across all layers
         all_layers_mean = np.mean(list(layer_attention_maps.values()), axis=0)
@@ -668,11 +675,11 @@ def visualize_token_attention(
             result_dict[f"Layer {layer_idx}"] = layer_attention_maps[layer_idx]
         result_dict["Mean (All Layers)"] = all_layers_mean
 
-        print(f"Visualization created successfully! Generated attention maps for {len(result_dict)} layers")
+        # print(f"Visualization created successfully! Generated attention maps for {len(result_dict)} layers")
         return result_dict
 
     except Exception as e:
-        print(f"Error in visualization: {str(e)}")
+        # print(f"Error in visualization: {str(e)}")
         import traceback
         traceback.print_exc()
         return None
@@ -720,13 +727,13 @@ def generate_sliding_window_video(
         if len(generated_token_positions) < window_size:
             return None, f"❌ 生成的token数量({len(generated_token_positions)})小于窗口大小({window_size})！请增加生成的token数量。"
         
-        print(f"\n{'='*60}")
-        print(f"生成滑动窗口注意力视频")
-        print(f"{'='*60}")
-        print(f"窗口大小: {window_size}")
-        print(f"FPS: {fps}")
-        print(f"生成的token数: {len(generated_token_positions)}")
-        print(f"{'='*60}\n")
+        # print(f"\n{'='*60}")
+        # print(f"生成滑动窗口注意力视频")
+        # print(f"{'='*60}")
+        # print(f"窗口大小: {window_size}")
+        # print(f"FPS: {fps}")
+        # print(f"生成的token数: {len(generated_token_positions)}")
+        # print(f"{'='*60}\n")
         
         # 计算滑动窗口注意力
         sliding_window_results = state.current_processor.get_sliding_window_attention_maps(
@@ -765,13 +772,13 @@ def generate_sliding_window_video(
         success_msg += f"🎬 帧数: {len(sliding_window_results)}\n"
         success_msg += f"⏱️ 时长: {len(sliding_window_results) / fps:.2f} 秒"
         
-        print(f"\n{success_msg}\n")
+        # print(f"\n{success_msg}\n")
         
         return video_path, success_msg
         
     except Exception as e:
         error_msg = f"❌ 生成视频时出错: {str(e)}"
-        print(error_msg)
+        # print(error_msg)
         import traceback
         traceback.print_exc()
         return None, error_msg
@@ -1088,7 +1095,7 @@ def create_layer_visualization(
         
         return result
     except Exception as e:
-        print(f"Error creating layer visualization: {e}")
+        # print(f"Error creating layer visualization: {e}")
         return None
 
 
@@ -1149,7 +1156,7 @@ def handle_range_token_click(token_idx, current_start, current_end, click_count)
         return new_start, new_end, new_click_count, html
         
     except Exception as e:
-        print(f"Error handling range token click: {e}")
+        # print(f"Error handling range token click: {e}")
         import traceback
         traceback.print_exc()
         return current_start, current_end, click_count, generate_token_range_display_html(
@@ -1201,7 +1208,7 @@ def update_token_range_display_manual(start_idx, end_idx, click_state):
         return html, click_count
         
     except Exception as e:
-        print(f"Error updating token display: {e}")
+        # print(f"Error updating token display: {e}")
         import traceback
         traceback.print_exc()
         return generate_token_range_display_html(state.current_tokens, None, None, 0), 0
@@ -1253,7 +1260,7 @@ def visualize_attention_unified(
     if selection_mode == "Single Token":
         # Use single token visualization with index
         if state.current_tokens is None or len(state.current_tokens) == 0:
-            print("ERROR: No tokens available")
+            # print("ERROR: No tokens available")
             return (None, None, None, None, 
                     gr.update(), gr.update(), gr.update(), gr.update(), 
                     "<div style='color: gray;'>No data</div>")
@@ -1274,14 +1281,14 @@ def visualize_attention_unified(
         try:
             # Check if indices are valid (not None)
             if token_range_start_idx is None or token_range_end_idx is None:
-                print("ERROR: Please select both start and end indices by clicking on tokens")
+                # print("ERROR: Please select both start and end indices by clicking on tokens")
                 return (None, None, None, None, 
                         gr.update(), gr.update(), gr.update(), gr.update(), 
                         "<div style='color: gray;'>No data</div>")
             
             # Handle empty string values
             if token_range_start_idx == '' or token_range_end_idx == '':
-                print("ERROR: Please select both start and end indices by clicking on tokens")
+                # print("ERROR: Please select both start and end indices by clicking on tokens")
                 return (None, None, None, None, 
                         gr.update(), gr.update(), gr.update(), gr.update(), 
                         "<div style='color: gray;'>No data</div>")
@@ -1290,7 +1297,7 @@ def visualize_attention_unified(
             token_end_idx = int(token_range_end_idx)
             
             if token_start_idx > token_end_idx:
-                print("WARNING: Start token is after end token, swapping them")
+                # print("WARNING: Start token is after end token, swapping them")
                 token_start_idx, token_end_idx = token_end_idx, token_start_idx
             
             # Use token range visualization
@@ -1302,7 +1309,7 @@ def visualize_attention_unified(
                 alpha=alpha
             )
         except Exception as e:
-            print(f"ERROR: Failed to visualize token range: {e}")
+            # print(f"ERROR: Failed to visualize token range: {e}")
             import traceback
             traceback.print_exc()
             return (None, None, None, None, 
@@ -2004,7 +2011,7 @@ def create_interface():
             global current_attention_maps
             
             if state.current_prompt_tokens is None or len(state.current_prompt_tokens) == 0:
-                print("ERROR: No prompt tokens available")
+                # print("ERROR: No prompt tokens available")
                 return (None, None, None, None, 
                         gr.update(), gr.update(), gr.update(), gr.update(), 
                         "<div style='color: gray;'>No prompt tokens available</div>")
@@ -2014,7 +2021,7 @@ def create_interface():
                 token_end_idx = int(token_end_idx)
                 
                 if token_start_idx > token_end_idx:
-                    print("WARNING: Start token is after end token, swapping them")
+                    # print("WARNING: Start token is after end token, swapping them")
                     token_start_idx, token_end_idx = token_end_idx, token_start_idx
                 
                 # Use prompt token visualization
@@ -2026,7 +2033,7 @@ def create_interface():
                     alpha=alpha
                 )
             except Exception as e:
-                print(f"ERROR: Failed to visualize prompt tokens: {e}")
+                # print(f"ERROR: Failed to visualize prompt tokens: {e}")
                 import traceback
                 traceback.print_exc()
                 return (None, None, None, None, 
@@ -2207,14 +2214,14 @@ def create_interface():
 # =============================================================================
 
 if __name__ == "__main__":
-    print("="*60)
-    print("Qwen2.5-VL Attention Visualization Tool")
-    print("="*60)
-    print(f"Default Model: {config.MODEL_NAME}")
-    print(f"Device: {config.MODEL_DEVICE_MAP}")
-    print(f"Server: {config.GRADIO_SERVER_NAME}:{config.GRADIO_SERVER_PORT}")
-    print("="*60)
-    print("Note: You can change the model path in the web interface.")
+    # print("="*60)
+    # print("Qwen2.5-VL Attention Visualization Tool")
+    # print("="*60)
+    # print(f"Default Model: {config.MODEL_NAME}")
+    # print(f"Device: {config.MODEL_DEVICE_MAP}")
+    # print(f"Server: {config.GRADIO_SERVER_NAME}:{config.GRADIO_SERVER_PORT}")
+    # print("="*60)
+    # print("Note: You can change the model path in the web interface.")
 
     # Create and launch interface
     demo = create_interface()
@@ -2226,9 +2233,9 @@ if __name__ == "__main__":
         )
     except ValueError as e:
         if "localhost is not accessible" in str(e):
-            print("\n" + "="*60)
-            print("WARNING: Localhost not accessible. Launching with share=True")
-            print("="*60 + "\n")
+            # print("\n" + "="*60)
+            # print("WARNING: Localhost not accessible. Launching with share=True")
+            # print("="*60 + "\n")
             demo.launch(
                 server_name=config.GRADIO_SERVER_NAME,
                 server_port=config.GRADIO_SERVER_PORT,
