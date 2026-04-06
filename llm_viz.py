@@ -16,6 +16,104 @@ import config
 from config import CACHE_DIR
 
 
+def clean_attention_dict(attention_dict, hidden_states, sink_dims=[1874, 1819], tau=20, bad_head_threshold=0.5):
+    """
+    通过hidden_state计算得到sink token的索引
+    处理注意力字典，移除被sink token影响的注意头
+    
+    Args:
+        attention_dict: Dictionary containing attention weights
+        hidden_states: Hidden states of the model
+        sink_dims: Sink token dimensions
+        tau: Temperature parameter
+        bad_head_threshold: Threshold for bad heads
+    Returns:
+        Cleaned attention dictionary
+    """
+    """
+    原地修改 attention_dict，剔除被 Sink Token 吸引的坏头
+    """
+    
+    # --- 1. 先找出哪些 Token 是 Sink Token ---
+    # hidden_states shape: [seq_len, 2048]
+    sink_vals = hidden_states[:, sink_dims]
+    rms = torch.sqrt(torch.mean(hidden_states ** 2, dim=-1, keepdim=True))
+    rms = torch.clamp(rms, min=1e-8)
+    sink_scores = torch.max(torch.abs(sink_vals) / rms, dim=-1).values
+    
+    # 得到一个布尔列表，True 代表是 Sink Token
+    is_sink_token = sink_scores >= tau  # shape: [seq_len]
+    sink_indices = torch.where(is_sink_token)[0].tolist()
+    
+    print(f"[Clean] 检测到 {len(sink_indices)} 个 Sink Tokens (阈值: {tau})")
+    if len(sink_indices) > 0:
+        print(f"[Clean] Sink Token 位置: {sink_indices[:20]}{'...' if len(sink_indices) > 20 else ''}")
+
+    # --- 2. 遍历字典进行清洗 ---
+    total_removed = 0
+    
+    for step_key, layers in attention_dict.items():
+        for layer_idx, heads_dict in layers.items():
+            
+            # 我们需要知道序列长度，取任意一个 head 的形状即可
+            sample_head_key = next(iter(heads_dict))
+            sample_attn = heads_dict[sample_head_key]
+            
+            # 统一处理：获取序列长度
+            if isinstance(sample_attn, torch.Tensor):
+                seq_len = sample_attn.shape[0]
+            else:
+                seq_len = sample_attn.shape[0]
+            
+            # 确保 is_sink_token 长度匹配（防止 padding 差异）
+            # 转换为 numpy 数组以便与注意力矩阵相乘
+            current_sink_mask = is_sink_token[:seq_len].cpu().numpy()
+            
+            bad_heads = []
+            
+            for head_idx, attn_matrix in heads_dict.items():
+                # 统一转换为 numpy 数组处理
+                if isinstance(attn_matrix, torch.Tensor):
+                    attn_matrix_np = attn_matrix.cpu().numpy()
+                else:
+                    attn_matrix_np = attn_matrix
+                
+                # attn_matrix shape: [seq_len, seq_len]
+                # 我们关注的是：作为 Query 的图像 Token，是否把注意力给了 Sink
+                
+                # 简单策略：计算整个矩阵中，有多少比例的注意力给了 Sink
+                # 或者更精准点：只看前 N 个 Token（图像区域）作为 Query 的情况
+                num_image_queries = min(256, seq_len) # 假设前256个是图像，根据你的实际情况调整
+                
+                query_attn = attn_matrix_np[:num_image_queries, :] # [num_img, seq_len]
+                
+                # 计算给 Sink 的总注意力
+                # 修复：使用 numpy 广播机制
+                attn_to_sink = (query_attn * current_sink_mask).sum()
+                # 计算总注意力
+                total_attn = query_attn.sum()
+                
+                if total_attn > 1e-8:
+                    sink_ratio = attn_to_sink / total_attn
+                    
+                    # --- 核心判断 ---
+                    # 如果这个头超过阈值的精力都在看 Sink，它就是坏头
+                    if sink_ratio > bad_head_threshold:
+                        bad_heads.append((head_idx, float(sink_ratio)))
+            
+            # --- 3. 执行删除 ---
+            for bad_head, ratio in bad_heads:
+                del heads_dict[bad_head]
+            
+            if bad_heads:
+                total_removed += len(bad_heads)
+                print(f"[Clean] Step {step_key}, Layer {layer_idx}: 剔除了 {len(bad_heads)} 个坏头 "
+                      f"(Sink关注比例: {[f'{r:.2%}' for _, r in bad_heads]})")
+    
+    print(f"[Clean] 总共剔除了 {total_removed} 个坏头")
+
+    return attention_dict
+
 def save_inference_data(image_path: str, prompt: str, generated_text: str, state):
     """
     Save inference data including image path, prompt, generated text, and attention weights.
@@ -408,6 +506,33 @@ def main():
     if state.current_tokens is None or len(state.current_tokens) == 0:
         print("No tokens generated, cannot visualize attention")
         return
+    
+    # 4.5 应用 Sink Token 注意力清洗
+    if state.current_attention and state.hidden_state:
+        try:
+            # 使用第一个层的 hidden state 来检测 sink tokens
+            first_layer_idx = min(state.hidden_state.keys())
+            hidden_state_for_cleaning = state.hidden_state[first_layer_idx]
+            
+            print("\n" + "="*60)
+            print("应用 Sink Token 注意力清洗")
+            print("="*60)
+            
+            # 清洗注意力数据
+            state.current_attention = clean_attention_dict(
+                attention_dict=state.current_attention,
+                hidden_states=hidden_state_for_cleaning,
+                sink_dims=[1874, 1819],
+                tau=20,
+                bad_head_threshold=0.5
+            )
+            
+            print("="*60 + "\n")
+            
+        except Exception as e:
+            print(f"[Warning] Sink Token 清洗失败: {e}")
+            import traceback
+            traceback.print_exc()
     
     # 5. 保存注意力热力图到./save目录
     # print(f"Visualizing attention for {len(state.current_tokens)} tokens...")
