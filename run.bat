@@ -1,1 +1,1 @@
-python llm_viz.py --image "D:/pvzHE/test2.jpg" --prompt "who is this girl?"
+python llm_viz.py --image "./photos/R(16).jpg" --prompt "dog"
