@@ -610,7 +610,7 @@ def main():
     
     # 创建注意力可视化器
     visualizer = AttentionVisualizer(colormap=args.colormap, alpha=args.alpha)
-    
+    print("生成的token range"+min(state.current_attention.keys()+max(state.current_attention.keys())))
     # 收集所有token的注意力图
     all_attention_maps = []
     input_len = min(state.current_attention.keys())
