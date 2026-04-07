@@ -620,7 +620,7 @@ def main():
     token_indices_to_visualize = []  # 只可视化最后一个token
     
     # 添加最后一个token（如果存在）
-    last_token_idx = max(state.current_attention.keys())
+    last_token_idx = len(state.current_tokens) - 1
     if last_token_idx >= 0:
         token_indices_to_visualize.append(last_token_idx)
     
@@ -630,8 +630,8 @@ def main():
          # 4.5 应用 Sink Token 注意力清洗
         if state.current_attention and state.hidden_state:
             try:
-                print(f"[Clean-Call] token_idx={token_idx}, last_token_idx={last_token_idx}, is_last_generated_token={token_idx == last_token_idx}")
-                print(f"[Clean-Call] token_text='{state.current_tokens[token_idx+input_len]}'")
+                print(f"[Clean-Call] token_idx={token_idx+input_len}, last_token_idx={last_token_idx+input_len}, is_last_generated_token={token_idx == last_token_idx}")
+                print(f"[Clean-Call] token_text='{state.current_tokens[token_idx]}'")
                 # 使用最后一个层的 hidden state 来检测 sink tokens
                 last_layer_idx = max(state.hidden_state.keys())
                 hidden_state_for_cleaning = state.hidden_state[last_layer_idx]
@@ -642,7 +642,7 @@ def main():
                 
                 # 清洗注意力数据
                 state.current_attention = clean_attention_dict(
-                    current_token = token_idx,
+                    current_token = token_idx + input_len,
                     attention_dict=state.current_attention,
                     hidden_states=hidden_state_for_cleaning,
                     vision_token_ranges=state.current_processor.vision_token_ranges if state.current_processor else None,
