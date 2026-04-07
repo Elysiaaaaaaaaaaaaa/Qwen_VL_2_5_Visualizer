@@ -115,9 +115,7 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
         
         # 统一处理：获取序列长度
         if isinstance(sample_attn, torch.Tensor):
-            seq_len = sample_attn.shape[0]
-        else:
-            seq_len = sample_attn.shape[0]
+            seq_len = current_token-49
         
         print(f"    - 序列长度: {seq_len}")
         print(f"    - 注意力矩阵形状: {sample_attn.shape}")
