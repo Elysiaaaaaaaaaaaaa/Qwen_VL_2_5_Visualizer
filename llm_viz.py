@@ -16,7 +16,7 @@ import config
 from config import CACHE_DIR
 
 
-def clean_attention_dict(attention_dict, hidden_states, sink_dims=[1874, 1819], tau=20, bad_head_threshold=0.5):
+def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None, sink_dims=[1874, 1819], tau=20, bad_head_threshold=0.5):
     """
     通过hidden_state计算得到sink token的索引
     处理注意力字典，移除被sink token影响的注意头
@@ -24,6 +24,7 @@ def clean_attention_dict(attention_dict, hidden_states, sink_dims=[1874, 1819], 
     Args:
         attention_dict: Dictionary containing attention weights
         hidden_states: Hidden states of the model
+        vision_token_ranges: Dictionary with 'image' and 'video' token ranges
         sink_dims: Sink token dimensions
         tau: Temperature parameter
         bad_head_threshold: Threshold for bad heads
@@ -34,26 +35,59 @@ def clean_attention_dict(attention_dict, hidden_states, sink_dims=[1874, 1819], 
     原地修改 attention_dict，剔除被 Sink Token 吸引的坏头
     """
     
+    print("\n" + "="*60)
+    print("[Clean] 开始注意力清洗过程")
+    print("="*60)
+    print(f"[Clean] 参数配置:")
+    print(f"  - sink_dims: {sink_dims}")
+    print(f"  - tau (sink检测阈值): {tau}")
+    print(f"  - bad_head_threshold (坏头阈值): {bad_head_threshold}")
+    print(f"  - vision_token_ranges: {vision_token_ranges}")
+    
     # --- 1. 先找出哪些 Token 是 Sink Token ---
+    print(f"\n[Clean] 步骤1: 检测 Sink Tokens")
+    print(f"  - hidden_states shape: {hidden_states.shape}")
+    
     # hidden_states shape: [seq_len, 2048]
     sink_vals = hidden_states[:, sink_dims]
+    print(f"  - sink_vals shape: {sink_vals.shape}")
+    print(f"  - sink_vals 统计: min={sink_vals.min():.4f}, max={sink_vals.max():.4f}, mean={sink_vals.mean():.4f}")
+    
     rms = torch.sqrt(torch.mean(hidden_states ** 2, dim=-1, keepdim=True))
     rms = torch.clamp(rms, min=1e-8)
+    print(f"  - rms shape: {rms.shape}")
+    print(f"  - rms 统计: min={rms.min():.4f}, max={rms.max():.4f}, mean={rms.mean():.4f}")
+    
     sink_scores = torch.max(torch.abs(sink_vals) / rms, dim=-1).values
+    print(f"  - sink_scores shape: {sink_scores.shape}")
+    print(f"  - sink_scores 统计: min={sink_scores.min():.4f}, max={sink_scores.max():.4f}, mean={sink_scores.mean():.4f}")
     
     # 得到一个布尔列表，True 代表是 Sink Token
     is_sink_token = sink_scores >= tau  # shape: [seq_len]
     sink_indices = torch.where(is_sink_token)[0].tolist()
     
-    print(f"[Clean] 检测到 {len(sink_indices)} 个 Sink Tokens (阈值: {tau})")
+    print(f"\n[Clean] Sink Token 检测结果:")
+    print(f"  - 检测到 {len(sink_indices)} 个 Sink Tokens (阈值: {tau})")
     if len(sink_indices) > 0:
-        print(f"[Clean] Sink Token 位置: {sink_indices[:20]}{'...' if len(sink_indices) > 20 else ''}")
+        print(f"  - Sink Token 位置: {sink_indices[:20]}{'...' if len(sink_indices) > 20 else ''}")
+        # 打印每个 sink token 的 score
+        for idx in sink_indices[:10]:
+            print(f"    Token {idx}: sink_score = {sink_scores[idx]:.4f}")
 
     # --- 2. 遍历字典进行清洗 ---
+    print(f"\n[Clean] 步骤2: 遍历注意力字典进行清洗")
+    print(f"  - 总共 {len(attention_dict)} 个生成步骤")
+    
     total_removed = 0
+    total_heads_checked = 0
     
     for step_key, layers in attention_dict.items():
+        print(f"\n[Clean] 处理 Step {step_key}:")
+        print(f"  - 包含 {len(layers)} 个层")
+        
         for layer_idx, heads_dict in layers.items():
+            print(f"\n  [Layer {layer_idx}]:")
+            print(f"    - 包含 {len(heads_dict)} 个注意力头")
             
             # 我们需要知道序列长度，取任意一个 head 的形状即可
             sample_head_key = next(iter(heads_dict))
@@ -65,13 +99,46 @@ def clean_attention_dict(attention_dict, hidden_states, sink_dims=[1874, 1819], 
             else:
                 seq_len = sample_attn.shape[0]
             
+            print(f"    - 序列长度: {seq_len}")
+            print(f"    - 注意力矩阵形状: {sample_attn.shape}")
+            
             # 确保 is_sink_token 长度匹配（防止 padding 差异）
             # 转换为 numpy 数组以便与注意力矩阵相乘
             current_sink_mask = is_sink_token[:seq_len].cpu().numpy()
+            print(f"    - Sink mask 长度: {len(current_sink_mask)}, True数量: {current_sink_mask.sum()}")
             
             bad_heads = []
             
+            # 构建所有 vision token 位置的集合
+            vision_token_positions = set()
+            if vision_token_ranges:
+                for start, end in vision_token_ranges.get('image', []):
+                    vision_token_positions.update(range(start, end))
+                for start, end in vision_token_ranges.get('video', []):
+                    vision_token_positions.update(range(start, end))
+            
+            # 如果没有提供 vision_token_ranges，使用默认值（前256个）
+            if not vision_token_positions:
+                print("    [Warning] 未提供 vision_token_ranges，使用默认值（前256个tokens）")
+                vision_token_positions = set(range(min(256, seq_len)))
+            
+            print(f"    - Vision Token 位置数量: {len(vision_token_positions)}")
+            if vision_token_positions:
+                vision_list = sorted(list(vision_token_positions))[:10]
+                print(f"    - Vision Token 位置示例: {vision_list}{'...' if len(vision_token_positions) > 10 else ''}")
+            
+            # 使用实际的 vision token 位置作为 Query
+            vision_query_indices = sorted([i for i in vision_token_positions if i < seq_len])
+            
+            if not vision_query_indices:
+                print("    [Warning] 没有有效的 vision query indices，跳过此层")
+                continue
+            
+            print(f"    - 有效的 Vision Query 数量: {len(vision_query_indices)}")
+            
             for head_idx, attn_matrix in heads_dict.items():
+                total_heads_checked += 1
+                
                 # 统一转换为 numpy 数组处理
                 if isinstance(attn_matrix, torch.Tensor):
                     attn_matrix_np = attn_matrix.cpu().numpy()
@@ -81,11 +148,8 @@ def clean_attention_dict(attention_dict, hidden_states, sink_dims=[1874, 1819], 
                 # attn_matrix shape: [seq_len, seq_len]
                 # 我们关注的是：作为 Query 的图像 Token，是否把注意力给了 Sink
                 
-                # 简单策略：计算整个矩阵中，有多少比例的注意力给了 Sink
-                # 或者更精准点：只看前 N 个 Token（图像区域）作为 Query 的情况
-                num_image_queries = min(256, seq_len) # 假设前256个是图像，根据你的实际情况调整
-                
-                query_attn = attn_matrix_np[:num_image_queries, :] # [num_img, seq_len]
+                # 提取 vision tokens 作为 Query 的注意力
+                query_attn = attn_matrix_np[vision_query_indices, :] # [num_vision, seq_len]
                 
                 # 计算给 Sink 的总注意力
                 # 修复：使用 numpy 广播机制
@@ -96,21 +160,33 @@ def clean_attention_dict(attention_dict, hidden_states, sink_dims=[1874, 1819], 
                 if total_attn > 1e-8:
                     sink_ratio = attn_to_sink / total_attn
                     
+                    # 每10个head打印一次统计信息
+                    if head_idx % 10 == 0:
+                        print(f"      Head {head_idx}: sink_ratio={sink_ratio:.4f} ({sink_ratio:.2%})")
+                    
                     # --- 核心判断 ---
                     # 如果这个头超过阈值的精力都在看 Sink，它就是坏头
                     if sink_ratio > bad_head_threshold:
                         bad_heads.append((head_idx, float(sink_ratio)))
+                        print(f"      [!] Head {head_idx} 被标记为坏头: sink_ratio={sink_ratio:.4f} > {bad_head_threshold}")
             
             # --- 3. 执行删除 ---
-            for bad_head, ratio in bad_heads:
-                del heads_dict[bad_head]
-            
             if bad_heads:
+                print(f"\n    执行删除: 剔除 {len(bad_heads)} 个坏头")
+                for bad_head, ratio in bad_heads:
+                    del heads_dict[bad_head]
+                    print(f"      - 删除 Head {bad_head}: sink_ratio={ratio:.2%}")
+                
                 total_removed += len(bad_heads)
-                print(f"[Clean] Step {step_key}, Layer {layer_idx}: 剔除了 {len(bad_heads)} 个坏头 "
-                      f"(Sink关注比例: {[f'{r:.2%}' for _, r in bad_heads]})")
+            else:
+                print(f"\n    无需删除: 本层没有坏头")
     
-    print(f"[Clean] 总共剔除了 {total_removed} 个坏头")
+    print(f"\n" + "="*60)
+    print(f"[Clean] 清洗完成统计:")
+    print(f"  - 检查的注意力头总数: {total_heads_checked}")
+    print(f"  - 剔除的坏头总数: {total_removed}")
+    print(f"  - 剔除比例: {total_removed/total_heads_checked*100:.2f}%" if total_heads_checked > 0 else "  - 剔除比例: 0%")
+    print("="*60 + "\n")
 
     return attention_dict
 
@@ -495,7 +571,7 @@ def main():
         # print("[Save] Inference data saved successfully!")
         
         # 验证hidden_state是否被正确提取
-        verify_hidden_state_extraction(state)
+        #verify_hidden_state_extraction(state)
     except Exception as e:
         print(f"Error during text generation: {str(e)}")
         import traceback
@@ -522,6 +598,7 @@ def main():
             state.current_attention = clean_attention_dict(
                 attention_dict=state.current_attention,
                 hidden_states=hidden_state_for_cleaning,
+                vision_token_ranges=state.current_processor.vision_token_ranges if state.current_processor else None,
                 sink_dims=[1874, 1819],
                 tau=20,
                 bad_head_threshold=0.5
