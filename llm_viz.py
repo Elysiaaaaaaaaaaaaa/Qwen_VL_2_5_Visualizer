@@ -114,8 +114,7 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
         sample_attn = heads_dict[sample_head_key]
         
         # 统一处理：获取序列长度
-        if isinstance(sample_attn, torch.Tensor):
-            seq_len = current_token-49
+        seq_len = current_token-49
         
         print(f"    - 序列长度: {seq_len}")
         print(f"    - 注意力矩阵形状: {sample_attn.shape}")
@@ -166,9 +165,9 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
             
             # 提取 vision tokens 作为 Query 的注意力
             if attn_matrix_np.shape[0]!=1:
-                query_attn = attn_matrix_np[vision_query_indices, :] # [num_vision, seq_len]
+                query_attn = attn_matrix_np[vision_query_indices, :seq_len] # [num_vision, seq_len]
             else:
-                query_attn = attn_matrix_np[0, :] # [seq_len]
+                query_attn = attn_matrix_np[0, :seq_len] # [seq_len]
             
             print(f"    - Query 注意力形状: {query_attn.shape}")
             
