@@ -165,7 +165,12 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
             # 我们关注的是：作为 Query 的图像 Token，是否把注意力给了 Sink
             
             # 提取 vision tokens 作为 Query 的注意力
-            query_attn = attn_matrix_np[vision_query_indices, :] # [num_vision, seq_len]
+            if attn_matrix_np.shape[0]!=1:
+                query_attn = attn_matrix_np[vision_query_indices, :] # [num_vision, seq_len]
+            else:
+                query_attn = attn_matrix_np[0, :] # [seq_len]
+            
+            print(f"    - Query 注意力形状: {query_attn.shape}")
             
             # 计算给 Sink 的总注意力
             # 修复：使用 numpy 广播机制
@@ -175,10 +180,7 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
             
             if total_attn > 1e-8:
                 sink_ratio = attn_to_sink / total_attn
-                
-                # 每10个head打印一次统计信息
-                if head_idx % 10 == 0:
-                    print(f"      Head {head_idx}: sink_ratio={sink_ratio:.4f} ({sink_ratio:.2%})")
+                print(f"      Head {head_idx}: sink_ratio={sink_ratio:.4f} ({sink_ratio:.2%})")
                 
                 # --- 核心判断 ---
                 # 如果这个头超过阈值的精力都在看 Sink，它就是坏头
