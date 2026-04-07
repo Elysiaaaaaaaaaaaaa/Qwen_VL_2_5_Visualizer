@@ -613,7 +613,7 @@ def main():
     
     # 收集所有token的注意力图
     all_attention_maps = []
-    input_len = min(state.current_attetion.keys())
+    input_len = min(state.current_attention.keys())
     # 确定要可视化的token索引
     num_tokens = len(state.current_tokens)
     # token_indices_to_visualize = [0, 1]  # prefill阶段(0)和第一个生成步(1) - 已注释
