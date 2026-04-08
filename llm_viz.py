@@ -270,6 +270,8 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
     # 得到一个布尔列表，True 代表是 Sink Token
     sink_scores = torch.max(torch.abs(hidden_states[:, sink_dims]) / 
                            torch.sqrt(torch.mean(hidden_states ** 2, dim=-1, keepdim=True)), dim=-1).values
+    mean_score = sink_scores.mean()
+    std_score = sink_scores.std()
     is_sink_token = sink_scores >= dynamic_threshold  # shape: [seq_len]
     sink_indices = torch.where(is_sink_token)[0].tolist()
     
