@@ -16,7 +16,7 @@ import config
 from config import CACHE_DIR
 
 
-def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None, sink_dims=[1874, 1819], tau=20, bad_head_threshold=0.5,current_token=None):
+def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None, sink_dims=[1874, 1819], bad_head_threshold=0.5, current_token=None, k_sigma=3.0):
     """
     通过hidden_state计算得到sink token的索引
     处理注意力字典，移除被sink token影响的注意头
@@ -26,9 +26,9 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
         hidden_states: Hidden states of the model
         vision_token_ranges: Dictionary with 'image' and 'video' token ranges
         sink_dims: Sink token dimensions
-        tau: Temperature parameter
         bad_head_threshold: Threshold for bad heads
         current_token: Current token index
+        k_sigma: 标准差倍数，用于动态计算阈值 (mean + k_sigma * std)
     Returns:
         Cleaned attention dictionary
     """
@@ -41,7 +41,7 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
     print("="*60)
     print(f"[Clean] 参数配置:")
     print(f"  - sink_dims: {sink_dims}")
-    print(f"  - tau (sink检测阈值): {tau}")
+    print(f"  - k_sigma (动态阈值倍数): {k_sigma}")
     print(f"  - bad_head_threshold (坏头阈值): {bad_head_threshold}")
     print(f"  - vision_token_ranges: {vision_token_ranges}")
     print(f"  - current_token: {current_token} (type={type(current_token).__name__})")
@@ -82,12 +82,19 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
     print(f"  - sink_scores shape: {sink_scores.shape}")
     print(f"  - sink_scores 统计: min={sink_scores.min():.4f}, max={sink_scores.max():.4f}, mean={sink_scores.mean():.4f}")
     
+    # 动态阈值：均值 + k_sigma * 标准差
+    mean_score = sink_scores.mean()
+    std_score = sink_scores.std()
+    dynamic_threshold = mean_score + k_sigma * std_score
+    
+    print(f"  - 动态阈值计算: mean={mean_score:.4f}, std={std_score:.4f}, threshold={dynamic_threshold:.4f}")
+    
     # 得到一个布尔列表，True 代表是 Sink Token
-    is_sink_token = sink_scores >= tau  # shape: [seq_len]
+    is_sink_token = sink_scores >= dynamic_threshold  # shape: [seq_len]
     sink_indices = torch.where(is_sink_token)[0].tolist()
     
     print(f"\n[Clean] Sink Token 检测结果:")
-    print(f"  - 检测到 {len(sink_indices)} 个 Sink Tokens (阈值: {tau})")
+    print(f"  - 检测到 {len(sink_indices)} 个 Sink Tokens (动态阈值: {dynamic_threshold:.4f} = {mean_score:.4f} + {k_sigma}*{std_score:.4f})")
     if len(sink_indices) > 0:
         print(f"  - Sink Token 位置: {sink_indices[:20]}{'...' if len(sink_indices) > 20 else ''}")
         # 打印每个 sink token 的 score
@@ -646,7 +653,7 @@ def main():
                     hidden_states=hidden_state_for_cleaning,
                     vision_token_ranges=state.current_processor.vision_token_ranges if state.current_processor else None,
                     sink_dims=[1874, 1819],
-                    tau=20,
+                    k_sigma=3.0,
                     bad_head_threshold=0.5
                 )
                 
