@@ -8,12 +8,209 @@ import os
 import pickle
 import shutil
 from datetime import datetime
+import matplotlib.pyplot as plt
 from app import load_model, generate_with_attention
 from app import state
 from app import visualize_token_attention, visualize_prompt_token_attention
 from visualization import AttentionVisualizer
 import config
 from config import CACHE_DIR
+
+
+def visualize_distribution(data, title, xlabel, ylabel="Frequency", color="steelblue", show_stats=True, **kwargs):
+    """
+    可视化数据分布的辅助函数
+    
+    Args:
+        data: 数据数组 (numpy array)
+        title: 图表标题
+        xlabel: x轴标签
+        ylabel: y轴标签
+        color: 柱状图颜色
+        show_stats: 是否显示统计信息线 (mean/min/max)
+        **kwargs: 其他matplotlib参数
+    """
+    fig, ax = plt.subplots(figsize=(10, 5))
+    
+    ax.hist(data, bins=50, color=color, edgecolor='black', alpha=0.7, **kwargs)
+    ax.set_xlabel(xlabel, fontsize=12)
+    ax.set_ylabel(ylabel, fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+    
+    if show_stats:
+        mean_val = np.mean(data)
+        min_val = np.min(data)
+        max_val = np.max(data)
+        
+        ax.axvline(mean_val, color='red', linestyle='--', linewidth=2, label=f'Mean: {mean_val:.4f}')
+        ax.axvline(min_val, color='green', linestyle=':', linewidth=2, label=f'Min: {min_val:.4f}')
+        ax.axvline(max_val, color='orange', linestyle=':', linewidth=2, label=f'Max: {max_val:.4f}')
+        ax.legend()
+    
+    plt.tight_layout()
+    plt.show()
+
+
+def visualize_line_plot(data, title, xlabel, ylabel, color="blue", marker='o', **kwargs):
+    """
+    绘制折线图的辅助函数
+    
+    Args:
+        data: 数据数组 (numpy array)
+        title: 图表标题
+        xlabel: x轴标签
+        ylabel: y轴标签
+        color: 线条颜色
+        marker: 标记样式
+        **kwargs: 其他matplotlib参数
+    """
+    fig, ax = plt.subplots(figsize=(10, 5))
+    
+    ax.plot(data, marker=marker, markersize=3, linestyle='-', linewidth=1, color=color, **kwargs)
+    ax.set_xlabel(xlabel, fontsize=12)
+    ax.set_ylabel(ylabel, fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
+
+
+def visualize_cumulative_distribution(data, title, xlabel, color="blue", threshold=None, **kwargs):
+    """
+    绘制累积分布图的辅助函数
+    
+    Args:
+        data: 数据数组 (numpy array)
+        title: 图表标题
+        xlabel: x轴标签
+        color: 线条颜色
+        threshold: 可选的阈值线
+        **kwargs: 其他matplotlib参数
+    """
+    sorted_data = np.sort(data)
+    cumprobs = np.arange(len(sorted_data)) / len(sorted_data)
+    
+    fig, ax = plt.subplots(figsize=(10, 5))
+    
+    ax.plot(sorted_data, cumprobs, color=color, linewidth=2, **kwargs)
+    ax.set_xlabel(xlabel, fontsize=12)
+    ax.set_ylabel('Cumulative Probability', fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+    
+    if threshold is not None:
+        ax.axvline(threshold, color='red', linestyle='--', linewidth=2, label=f'Threshold: {threshold:.4f}')
+        ax.legend()
+    
+    plt.tight_layout()
+    plt.show()
+
+
+def visualize_sink_token_analysis(hidden_states, sink_dims, k_sigma, current_token=None):
+    """
+    可视化Sink Token分析的完整流程
+    
+    包括:
+    1. sink_vals分布直方图 + 每个token的最大sink值
+    2. RMS值分布
+    3. sink_scores分布直方图 + 累积分布
+    
+    Args:
+        hidden_states: 隐藏状态张量 [seq_len, hidden_size]
+        sink_dims: sink token的维度索引列表
+        k_sigma: 动态阈值的sigma倍数
+        current_token: 当前token位置 (可选)
+    """
+    print(f"\n[Clean] 步骤1: 检测 Sink Tokens")
+    print(f"  - hidden_states shape: {hidden_states.shape}")
+    
+    sink_vals = hidden_states[:, sink_dims]
+    print(f"  - sink_vals shape: {sink_vals.shape}")
+    
+    sink_vals_np = sink_vals.cpu().numpy()
+    
+    # 可视化 sink_vals 分布
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    
+    axes[0].hist(sink_vals_np.flatten(), bins=50, color='steelblue', edgecolor='black', alpha=0.7)
+    axes[0].set_xlabel('Sink Values', fontsize=12)
+    axes[0].set_ylabel('Frequency', fontsize=12)
+    axes[0].set_title('Distribution of Sink Values', fontsize=14, fontweight='bold')
+    axes[0].grid(True, alpha=0.3)
+    axes[0].axvline(sink_vals_np.mean(), color='red', linestyle='--', linewidth=2, label=f'Mean: {sink_vals_np.mean():.4f}')
+    axes[0].axvline(sink_vals_np.min(), color='green', linestyle=':', linewidth=2, label=f'Min: {sink_vals_np.min():.4f}')
+    axes[0].axvline(sink_vals_np.max(), color='orange', linestyle=':', linewidth=2, label=f'Max: {sink_vals_np.max():.4f}')
+    axes[0].legend()
+    
+    max_sink_per_token = np.max(np.abs(sink_vals_np), axis=1)
+    axes[1].plot(max_sink_per_token, marker='o', markersize=3, linestyle='-', linewidth=1, color='purple')
+    axes[1].set_xlabel('Token Index', fontsize=12)
+    axes[1].set_ylabel('Max |Sink Value|', fontsize=12)
+    axes[1].set_title('Max Sink Values per Token', fontsize=14, fontweight='bold')
+    axes[1].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
+    
+    print(f"  - sink_vals 统计: min={sink_vals.min():.4f}, max={sink_vals.max():.4f}, mean={sink_vals.mean():.4f}")
+    
+    rms = torch.sqrt(torch.mean(hidden_states ** 2, dim=-1, keepdim=True))
+    rms = torch.clamp(rms, min=1e-8)
+    print(f"  - rms shape: {rms.shape}")
+    
+    rms_np = rms.squeeze().cpu().numpy()
+    fig_rms, ax_rms = plt.subplots(figsize=(10, 5))
+    ax_rms.hist(rms_np, bins=50, color='coral', edgecolor='black', alpha=0.7)
+    ax_rms.set_xlabel('RMS Values', fontsize=12)
+    ax_rms.set_ylabel('Frequency', fontsize=12)
+    ax_rms.set_title('Distribution of RMS Values', fontsize=14, fontweight='bold')
+    ax_rms.grid(True, alpha=0.3)
+    ax_rms.axvline(rms_np.mean(), color='red', linestyle='--', linewidth=2, label=f'Mean: {rms_np.mean():.4f}')
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+    
+    print(f"  - rms 统计: min={rms.min():.4f}, max={rms.max():.4f}, mean={rms.mean():.4f}")
+    
+    sink_scores = torch.max(torch.abs(sink_vals) / rms, dim=-1).values
+    print(f"  - sink_scores shape: {sink_scores.shape}")
+    
+    mean_score = sink_scores.mean()
+    std_score = sink_scores.std()
+    dynamic_threshold = mean_score + k_sigma * std_score
+    
+    sink_scores_np = sink_scores.cpu().numpy()
+    fig_scores, axes_scores = plt.subplots(1, 2, figsize=(14, 5))
+    
+    axes_scores[0].hist(sink_scores_np, bins=50, color='mediumseagreen', edgecolor='black', alpha=0.7)
+    axes_scores[0].set_xlabel('Sink Scores', fontsize=12)
+    axes_scores[0].set_ylabel('Frequency', fontsize=12)
+    axes_scores[0].set_title('Distribution of Sink Scores', fontsize=14, fontweight='bold')
+    axes_scores[0].grid(True, alpha=0.3)
+    axes_scores[0].axvline(sink_scores_np.mean(), color='red', linestyle='--', linewidth=2, label=f'Mean: {sink_scores_np.mean():.4f}')
+    axes_scores[0].axvline(sink_scores_np.min(), color='green', linestyle=':', linewidth=2, label=f'Min: {sink_scores_np.min():.4f}')
+    axes_scores[0].axvline(sink_scores_np.max(), color='orange', linestyle=':', linewidth=2, label=f'Max: {sink_scores_np.max():.4f}')
+    axes_scores[0].legend()
+    
+    sorted_scores = np.sort(sink_scores_np)
+    cumprobs = np.arange(len(sorted_scores)) / len(sorted_scores)
+    axes_scores[1].plot(sorted_scores, cumprobs, color='blue', linewidth=2)
+    axes_scores[1].set_xlabel('Sink Scores', fontsize=12)
+    axes_scores[1].set_ylabel('Cumulative Probability', fontsize=12)
+    axes_scores[1].set_title('Cumulative Distribution of Sink Scores', fontsize=14, fontweight='bold')
+    axes_scores[1].grid(True, alpha=0.3)
+    axes_scores[1].axvline(dynamic_threshold, color='red', linestyle='--', linewidth=2, label=f'Threshold: {dynamic_threshold:.4f}')
+    axes_scores[1].legend()
+    
+    plt.tight_layout()
+    plt.show()
+    
+    print(f"  - sink_scores 统计: min={sink_scores.min():.4f}, max={sink_scores.max():.4f}, mean={sink_scores.mean():.4f}")
+    print(f"  - 动态阈值计算: mean={mean_score:.4f}, std={std_score:.4f}, threshold={dynamic_threshold:.4f}")
+    
+    return dynamic_threshold
 
 
 def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None, sink_dims=[1874, 1819], bad_head_threshold=0.5, current_token=None, k_sigma=3.0):
@@ -64,32 +261,15 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
             print(f"  - attention 最后 step key(字符串): {last_step_key}")
             print(f"  - current_token 是否最后 step(字符串比较): {is_last_step}")
     
-    # --- 1. 先找出哪些 Token 是 Sink Token ---
     print(f"\n[Clean] 步骤1: 检测 Sink Tokens")
     print(f"  - hidden_states shape: {hidden_states.shape}")
     
-    # hidden_states shape: [seq_len, 2048]
-    sink_vals = hidden_states[:, sink_dims]
-    print(f"  - sink_vals shape: {sink_vals.shape}")
-    print(f"  - sink_vals 统计: min={sink_vals.min():.4f}, max={sink_vals.max():.4f}, mean={sink_vals.mean():.4f}")
-    
-    rms = torch.sqrt(torch.mean(hidden_states ** 2, dim=-1, keepdim=True))
-    rms = torch.clamp(rms, min=1e-8)
-    print(f"  - rms shape: {rms.shape}")
-    print(f"  - rms 统计: min={rms.min():.4f}, max={rms.max():.4f}, mean={rms.mean():.4f}")
-    
-    sink_scores = torch.max(torch.abs(sink_vals) / rms, dim=-1).values
-    print(f"  - sink_scores shape: {sink_scores.shape}")
-    print(f"  - sink_scores 统计: min={sink_scores.min():.4f}, max={sink_scores.max():.4f}, mean={sink_scores.mean():.4f}")
-    
-    # 动态阈值：均值 + k_sigma * 标准差
-    mean_score = sink_scores.mean()
-    std_score = sink_scores.std()
-    dynamic_threshold = mean_score + k_sigma * std_score
-    
-    print(f"  - 动态阈值计算: mean={mean_score:.4f}, std={std_score:.4f}, threshold={dynamic_threshold:.4f}")
+    # 调用封装的可视化函数
+    dynamic_threshold = visualize_sink_token_analysis(hidden_states, sink_dims, k_sigma, current_token)
     
     # 得到一个布尔列表，True 代表是 Sink Token
+    sink_scores = torch.max(torch.abs(hidden_states[:, sink_dims]) / 
+                           torch.sqrt(torch.mean(hidden_states ** 2, dim=-1, keepdim=True)), dim=-1).values
     is_sink_token = sink_scores >= dynamic_threshold  # shape: [seq_len]
     sink_indices = torch.where(is_sink_token)[0].tolist()
     
