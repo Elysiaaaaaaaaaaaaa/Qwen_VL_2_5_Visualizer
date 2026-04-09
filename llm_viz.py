@@ -165,7 +165,7 @@ def visualize_sink_token_analysis(hidden_states, sink_dims, k_sigma, current_tok
     else:
         plt.show()
     
-    print(f"  - sink_vals 统计: min={sink_vals.min():.4f}, max={sink_vals.max():.4f}, mean={sink_vals.mean():.4f}")
+    print(f"  - sink_vals 统计: min={sink_vals.min().float().item():.4f}, max={sink_vals.max().float().item():.4f}, mean={sink_vals.mean().float().item():.4f}")
     
     rms = torch.sqrt(torch.mean(hidden_states ** 2, dim=-1, keepdim=True))
     rms = torch.clamp(rms, min=1e-8)
@@ -189,13 +189,13 @@ def visualize_sink_token_analysis(hidden_states, sink_dims, k_sigma, current_tok
     else:
         plt.show()
     
-    print(f"  - rms 统计: min={rms.min():.4f}, max={rms.max():.4f}, mean={rms.mean():.4f}")
+    print(f"  - rms 统计: min={rms.min().float().item():.4f}, max={rms.max().float().item():.4f}, mean={rms.mean().float().item():.4f}")
     
     sink_scores = torch.max(torch.abs(sink_vals) / rms, dim=-1).values
     print(f"  - sink_scores shape: {sink_scores.shape}")
     
-    mean_score = sink_scores.mean()
-    std_score = sink_scores.std()
+    mean_score = sink_scores.mean().float().item()
+    std_score = sink_scores.std().float().item()
     dynamic_threshold = mean_score + k_sigma * std_score
     
     sink_scores_np = sink_scores.cpu().float().numpy()
@@ -230,7 +230,7 @@ def visualize_sink_token_analysis(hidden_states, sink_dims, k_sigma, current_tok
     else:
         plt.show()
     
-    print(f"  - sink_scores 统计: min={sink_scores.min():.4f}, max={sink_scores.max():.4f}, mean={sink_scores.mean():.4f}")
+    print(f"  - sink_scores 统计: min={sink_scores.min().float().item():.4f}, max={sink_scores.max().float().item():.4f}, mean={sink_scores.mean().float().item():.4f}")
     print(f"  - 动态阈值计算: mean={mean_score:.4f}, std={std_score:.4f}, threshold={dynamic_threshold:.4f}")
     
     return dynamic_threshold, mean_score, std_score
