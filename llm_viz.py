@@ -705,7 +705,7 @@ def analyze_all_layers_massive_activations(state, top_k=5):
 parser = argparse.ArgumentParser(description='Qwen2.5-VL Attention Visualization with OpenCV')
 parser.add_argument('--image', type=str, required=True, help='Path to input image')
 parser.add_argument('--prompt', type=str, required=True, help='Text prompt for image description')
-parser.add_argument('--model_path', type=str, default='Qwen/Qwen2.5-VL-3B-Instruct', help='Path to model')
+parser.add_argument('--model_path', type=str, default=config.MODEL_NAME, help='Path to model')
 parser.add_argument('--content_order', type=str, default='Image → Text', choices=['Image → Text', 'Text → Image'], help='Order of image and text in prompt')
 parser.add_argument('--max_new_tokens', type=int, default=50, help='Maximum number of new tokens to generate')
 parser.add_argument('--temperature', type=float, default=0.8, help='Temperature for sampling')
