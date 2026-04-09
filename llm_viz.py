@@ -194,9 +194,13 @@ def visualize_sink_token_analysis(hidden_states, sink_dims, k_sigma, current_tok
     sink_scores = torch.max(torch.abs(sink_vals) / rms, dim=-1).values
     print(f"  - sink_scores shape: {sink_scores.shape}")
     
+    # mean_score = sink_scores.mean().float().item()
+    # std_score = sink_scores.std().float().item()
+    # dynamic_threshold = mean_score + k_sigma * std_score
+    
     mean_score = sink_scores.mean().float().item()
     std_score = sink_scores.std().float().item()
-    dynamic_threshold = mean_score + k_sigma * std_score
+    dynamic_threshold = torch.quantile(sink_scores, 0.85).float().item()
     
     sink_scores_np = sink_scores.cpu().float().numpy()
     fig_scores, axes_scores = plt.subplots(1, 2, figsize=(14, 5))
@@ -294,11 +298,17 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
     # 得到一个布尔列表，True 代表是 Sink Token
     sink_scores = torch.max(torch.abs(hidden_states[:, sink_dims]) / 
                            torch.sqrt(torch.mean(hidden_states ** 2, dim=-1, keepdim=True)), dim=-1).values
-    is_sink_token = sink_scores >= dynamic_threshold  # shape: [seq_len]
+    
+    # is_sink_token = sink_scores >= dynamic_threshold  # shape: [seq_len]
+    # sink_indices = torch.where(is_sink_token)[0].tolist()
+    
+    threshold_85_percentile = torch.quantile(sink_scores, 0.85)
+    is_sink_token = sink_scores >= threshold_85_percentile  # shape: [seq_len]
     sink_indices = torch.where(is_sink_token)[0].tolist()
     
     print(f"\n[Clean] Sink Token 检测结果:")
-    print(f"  - 检测到 {len(sink_indices)} 个 Sink Tokens (动态阈值: {dynamic_threshold:.4f} = {mean_score:.4f} + {k_sigma}*{std_score:.4f})")
+    # print(f"  - 检测到 {len(sink_indices)} 个 Sink Tokens (动态阈值: {dynamic_threshold:.4f} = {mean_score:.4f} + {k_sigma}*{std_score:.4f})")
+    print(f"  - 检测到 {len(sink_indices)} 个 Sink Tokens (Top 15% 阈值: {threshold_85_percentile:.4f})")
     if len(sink_indices) > 0:
         print(f"  - Sink Token 位置: {sink_indices[:20]}{'...' if len(sink_indices) > 20 else ''}")
         # 打印每个 sink token 的 score
