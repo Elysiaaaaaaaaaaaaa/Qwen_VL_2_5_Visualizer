@@ -236,7 +236,7 @@ def visualize_sink_token_analysis(hidden_states, sink_dims, k_sigma, current_tok
     return dynamic_threshold, mean_score, std_score
 
 
-def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None, sink_dims=[1874, 1819], bad_head_threshold=0.5, current_token=None, k_sigma=3.0, save_dir=None):
+def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None, sink_dims=[458, 2570], bad_head_threshold=0.5, current_token=None, k_sigma=3.0, save_dir=None):
     """
     通过hidden_state计算得到sink token的索引
     处理注意力字典，移除被sink token影响的注意头
