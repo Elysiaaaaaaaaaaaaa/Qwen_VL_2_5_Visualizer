@@ -23,7 +23,7 @@ MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"
 PROCESSOR_NAME = "Qwen/Qwen2-VL-7B-Instruct"
 # Model loading parameters
 MODEL_DEVICE_MAP = "auto"  # Auto-assign layers to available devices
-MODEL_TORCH_DTYPE = torch.float16  # Use float32 for full precision
+MODEL_TORCH_DTYPE = torch.bfloat16  # Use float32 for full precision
 
 # Special token IDs (from Qwen2.5-VL config)
 IMAGE_TOKEN_ID = 151655
