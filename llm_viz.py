@@ -856,7 +856,7 @@ def main():
                     attention_dict=state.current_attention,
                     hidden_states=hidden_state_for_cleaning,
                     vision_token_ranges=state.current_processor.vision_token_ranges if state.current_processor else None,
-                    sink_dims=[1874, 1819],
+                    sink_dims=[458, 2570],
                     k_sigma=3.0,
                     bad_head_threshold=0.5,
                     save_dir='./save'
