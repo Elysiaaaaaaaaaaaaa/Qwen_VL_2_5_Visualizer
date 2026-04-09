@@ -242,7 +242,7 @@ class AttentionProcessor:
         start, end = self.vision_token_ranges['image'][image_idx]
         num_tokens = end - start
 
-        attention_values = vision_attention[:num_tokens].cpu().numpy()
+        attention_values = vision_attention[:num_tokens].cpu().float().numpy()
 
         token_count = 0
         for token_idx in range(start, end):

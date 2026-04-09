@@ -134,7 +134,7 @@ def visualize_sink_token_analysis(hidden_states, sink_dims, k_sigma, current_tok
     sink_vals = hidden_states[:, sink_dims]
     print(f"  - sink_vals shape: {sink_vals.shape}")
     
-    sink_vals_np = sink_vals.cpu().numpy()
+    sink_vals_np = sink_vals.cpu().float().numpy()
     
     # 可视化 sink_vals 分布
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
@@ -171,7 +171,7 @@ def visualize_sink_token_analysis(hidden_states, sink_dims, k_sigma, current_tok
     rms = torch.clamp(rms, min=1e-8)
     print(f"  - rms shape: {rms.shape}")
     
-    rms_np = rms.squeeze().cpu().numpy()
+    rms_np = rms.squeeze().cpu().float().numpy()
     fig_rms, ax_rms = plt.subplots(figsize=(10, 5))
     ax_rms.hist(rms_np, bins=50, color='coral', edgecolor='black', alpha=0.7)
     ax_rms.set_xlabel('RMS Values', fontsize=12)
@@ -198,7 +198,7 @@ def visualize_sink_token_analysis(hidden_states, sink_dims, k_sigma, current_tok
     std_score = sink_scores.std()
     dynamic_threshold = mean_score + k_sigma * std_score
     
-    sink_scores_np = sink_scores.cpu().numpy()
+    sink_scores_np = sink_scores.cpu().float().numpy()
     fig_scores, axes_scores = plt.subplots(1, 2, figsize=(14, 5))
     
     axes_scores[0].hist(sink_scores_np, bins=50, color='mediumseagreen', edgecolor='black', alpha=0.7)
@@ -332,7 +332,7 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
         
         # 确保 is_sink_token 长度匹配（防止 padding 差异）
         # 转换为 numpy 数组以便与注意力矩阵相乘
-        current_sink_mask = is_sink_token[:seq_len].cpu().numpy()
+        current_sink_mask = is_sink_token[:seq_len].cpu().float().numpy()
         print(f"    - Sink mask 长度: {len(current_sink_mask)}, True数量: {current_sink_mask.sum()}")
         
         bad_heads = []
@@ -367,7 +367,7 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
             
             # 统一转换为 numpy 数组处理
             if isinstance(attn_matrix, torch.Tensor):
-                attn_matrix_np = attn_matrix.cpu().numpy()
+                attn_matrix_np = attn_matrix.cpu().float().numpy()
             else:
                 attn_matrix_np = attn_matrix
             
@@ -471,7 +471,7 @@ def save_inference_data(image_path: str, prompt: str, generated_text: str, state
                 for layer_idx, layer_data in step_data.items():
                     attention_data[step_key][layer_idx] = {}
                     for head_idx, head_data in layer_data.items():
-                        attention_data[step_key][layer_idx][head_idx] = head_data.cpu().numpy()
+                        attention_data[step_key][layer_idx][head_idx] = head_data.cpu().float().numpy()
             
             attention_path = os.path.join(save_path, "attention_weights.pkl")
             with open(attention_path, "wb") as f:
@@ -483,7 +483,7 @@ def save_inference_data(image_path: str, prompt: str, generated_text: str, state
             hidden_state_data = {}
             for layer_idx, hidden_state in state.hidden_state.items():
                 if hidden_state is not None:
-                    hidden_state_data[layer_idx] = hidden_state.cpu().numpy()
+                    hidden_state_data[layer_idx] = hidden_state.cpu().float().numpy()
             
             hidden_state_path = os.path.join(save_path, "hidden_states.pkl")
             with open(hidden_state_path, "wb") as f:

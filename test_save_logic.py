@@ -94,7 +94,7 @@ def test_save_logic():
                 for layer_idx, layer_data in step_data.items():
                     attention_data[step_key][layer_idx] = {}
                     for head_idx, head_data in layer_data.items():
-                        attention_data[step_key][layer_idx][head_idx] = head_data.cpu().numpy()
+                        attention_data[step_key][layer_idx][head_idx] = head_data.cpu().float().numpy()
             
             attention_path = os.path.join(save_path, "attention_weights.pkl")
             with open(attention_path, "wb") as f:

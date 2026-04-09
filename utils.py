@@ -335,7 +335,7 @@ def create_attention_mask_visualization(
     Returns:
         Binary mask as numpy array
     """
-    attention_np = attention.cpu().numpy() if isinstance(attention, torch.Tensor) else attention
+    attention_np = attention.cpu().float().numpy() if isinstance(attention, torch.Tensor) else attention
     mask = (attention_np > threshold).astype(np.uint8)
 
     return mask
