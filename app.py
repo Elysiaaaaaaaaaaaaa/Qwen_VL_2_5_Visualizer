@@ -7,7 +7,10 @@ visualizing attention patterns in Qwen2.5-VL during text generation.
 
 import gradio as gr
 import torch
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+# Qwen2.5-VL (original)
+# from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+# Qwen2-VL (current)
+from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
 from PIL import Image
 import numpy as np
 from typing import Optional, List, Tuple, Dict
@@ -67,7 +70,7 @@ state = ModelState()
 # =============================================================================
 
 def load_model(model_path: str):
-    """Load Qwen2.5-VL model and processor."""
+    """Load Qwen2-VL/Qwen2.5-VL model and processor."""
     if state.model is not None:
         return "Model already loaded! Please restart the app to load a different model."
 
@@ -76,7 +79,7 @@ def load_model(model_path: str):
 
     try:
         # print(f"Loading model: {model_path}")
-        state.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        state.model = Qwen2VLForConditionalGeneration.from_pretrained(
             model_path,
             torch_dtype=config.MODEL_TORCH_DTYPE,
             device_map=config.MODEL_DEVICE_MAP,

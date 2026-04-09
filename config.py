@@ -14,8 +14,13 @@ from pathlib import Path
 # MODEL_NAME = "/data/yuwei_hu/models--Qwen--Qwen2.5-VL-7B-Instruct/snapshots/Qwen2.5-VL-7B-Instruct"
 # PROCESSOR_NAME = "/data/yuwei_hu/models--Qwen--Qwen2.5-VL-7B-Instruct/snapshots/Qwen2.5-VL-7B-Instruct"  # Processor is compatible across sizes
 
-MODEL_NAME = "Qwen/Qwen2.5-VL-3B-Instruct"
-PROCESSOR_NAME = "Qwen/Qwen2.5-VL-3B-Instruct"
+# Qwen2.5-VL-3B-Instruct (original)
+# MODEL_NAME = "Qwen/Qwen2.5-VL-3B-Instruct"
+# PROCESSOR_NAME = "Qwen/Qwen2.5-VL-3B-Instruct"
+
+# Qwen2-VL-7B-Instruct (current)
+MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"
+PROCESSOR_NAME = "Qwen/Qwen2-VL-7B-Instruct"
 # Model loading parameters
 MODEL_DEVICE_MAP = "auto"  # Auto-assign layers to available devices
 MODEL_TORCH_DTYPE = torch.float32  # Use float32 for full precision
@@ -26,12 +31,18 @@ VIDEO_TOKEN_ID = 151656
 VISION_START_TOKEN_ID = 151652
 VISION_END_TOKEN_ID = 151653
 
-# Vision configuration (from Qwen2.5-VL architecture)
+# Vision configuration (from Qwen2-VL/Qwen2.5-VL architecture)
 VISION_PATCH_SIZE = 14  # Each patch is 14x14 pixels
 SPATIAL_MERGE_SIZE = 2  # 2x2 patches merged into one token
 TEMPORAL_PATCH_SIZE = 2  # For videos
-VISION_HIDDEN_SIZE = 3584  # Vision encoder hidden dimension
-TEXT_HIDDEN_SIZE = 3584  # Text model hidden dimension (for 3B model)
+
+# Qwen2.5-VL-3B-Instruct
+# VISION_HIDDEN_SIZE = 1280  # Vision encoder hidden dimension (embed_dim in vision_config)
+# TEXT_HIDDEN_SIZE = 2048    # Text model hidden dimension
+
+# Qwen2-VL-7B-Instruct (current)
+VISION_HIDDEN_SIZE = 1280  # Vision encoder hidden dimension (embed_dim in vision_config)
+TEXT_HIDDEN_SIZE = 3584    # Text model hidden dimension
 
 # Derived constants
 PATCH_FACTOR = VISION_PATCH_SIZE * SPATIAL_MERGE_SIZE  # 28 pixels per merged patch

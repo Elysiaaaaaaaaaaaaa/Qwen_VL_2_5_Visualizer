@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Script to print the structure of the Qwen2.5-VL model
+Script to print the structure of the Qwen2-VL/Qwen2.5-VL model
 
 This script loads the model and prints its detailed structure,
 including layers, heads, and parameter counts.
@@ -8,7 +8,10 @@ including layers, heads, and parameter counts.
 
 import argparse
 import torch
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+# Qwen2.5-VL (original)
+# from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+# Qwen2-VL (current)
+from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
 import config
 
 def print_model_summary(model):
@@ -113,7 +116,7 @@ def main():
     """
     Main function to load model and print structure
     """
-    parser = argparse.ArgumentParser(description='Print Qwen2.5-VL model structure')
+    parser = argparse.ArgumentParser(description='Print Qwen2-VL/Qwen2.5-VL model structure')
     parser.add_argument('--model_path', type=str, 
                         default=config.MODEL_NAME, 
                         help='Path to model (local or Hugging Face hub)')
@@ -124,7 +127,7 @@ def main():
     
     try:
         # Load model with eager attention implementation for compatibility
-        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        model = Qwen2VLForConditionalGeneration.from_pretrained(
             args.model_path,
             torch_dtype=config.MODEL_TORCH_DTYPE,
             device_map=config.MODEL_DEVICE_MAP,
