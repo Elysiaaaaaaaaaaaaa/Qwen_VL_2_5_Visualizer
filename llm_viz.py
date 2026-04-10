@@ -108,91 +108,27 @@ def visualize_cumulative_distribution(data, title, xlabel, color="blue", thresho
     plt.show()
 
 
-def visualize_sink_token_analysis(hidden_states, sink_dims, k_sigma, current_token=None, save_dir=None):
+def visualize_sink_token_analysis(sink_scores, k_sigma, current_token=None, save_dir=None):
     """
     可视化Sink Token分析的完整流程
     
     包括:
-    1. sink_vals分布直方图 + 每个token的最大sink值
-    2. RMS值分布
-    3. sink_scores分布直方图 + 累积分布
+    1. sink_scores分布直方图 + 累积分布
     
     Args:
-        hidden_states: 隐藏状态张量 [seq_len, hidden_size]
-        sink_dims: sink token的维度索引列表
+        sink_scores: 已经计算好的sink scores张量 [seq_len]
         k_sigma: 动态阈值的sigma倍数
         current_token: 当前token位置 (可选)
         save_dir: 保存图片的文件夹路径，如果为None则显示图片
     """
-    print(f"\n[Clean] 步骤1: 检测 Sink Tokens")
-    print(f"  - hidden_states shape: {hidden_states.shape}")
+    print(f"\n[Clean] 步骤1: 可视化 Sink Scores")
+    print(f"  - sink_scores shape: {sink_scores.shape}")
     
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
         print(f"  - 图片将保存到: {save_dir}")
     
-    sink_vals = hidden_states[:, sink_dims]
-    print(f"  - sink_vals shape: {sink_vals.shape}")
-    
-    sink_vals_np = sink_vals.cpu().float().numpy()
-    
-    # 可视化 sink_vals 分布
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    
-    axes[0].hist(sink_vals_np.flatten(), bins=50, color='steelblue', edgecolor='black', alpha=0.7)
-    axes[0].set_xlabel('Sink Values', fontsize=12)
-    axes[0].set_ylabel('Frequency', fontsize=12)
-    axes[0].set_title('Distribution of Sink Values', fontsize=14, fontweight='bold')
-    axes[0].grid(True, alpha=0.3)
-    axes[0].axvline(sink_vals_np.mean(), color='red', linestyle='--', linewidth=2, label=f'Mean: {sink_vals_np.mean():.4f}')
-    axes[0].axvline(sink_vals_np.min(), color='green', linestyle=':', linewidth=2, label=f'Min: {sink_vals_np.min():.4f}')
-    axes[0].axvline(sink_vals_np.max(), color='orange', linestyle=':', linewidth=2, label=f'Max: {sink_vals_np.max():.4f}')
-    axes[0].legend()
-    
-    max_sink_per_token = np.max(np.abs(sink_vals_np), axis=1)
-    axes[1].plot(max_sink_per_token, marker='o', markersize=3, linestyle='-', linewidth=1, color='purple')
-    axes[1].set_xlabel('Token Index', fontsize=12)
-    axes[1].set_ylabel('Max |Sink Value|', fontsize=12)
-    axes[1].set_title('Max Sink Values per Token', fontsize=14, fontweight='bold')
-    axes[1].grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    if save_dir:
-        save_path = os.path.join(save_dir, f"1_sink_vals_distribution.png")
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"  - 保存: {save_path}")
-        plt.close(fig)
-    else:
-        plt.show()
-    
-    print(f"  - sink_vals 统计: min={sink_vals.min().float().item():.4f}, max={sink_vals.max().float().item():.4f}, mean={sink_vals.mean().float().item():.4f}")
-    
-    rms = torch.sqrt(torch.mean(hidden_states ** 2, dim=-1, keepdim=True))
-    rms = torch.clamp(rms, min=1e-8)
-    print(f"  - rms shape: {rms.shape}")
-    
-    rms_np = rms.squeeze().cpu().float().numpy()
-    fig_rms, ax_rms = plt.subplots(figsize=(10, 5))
-    ax_rms.hist(rms_np, bins=50, color='coral', edgecolor='black', alpha=0.7)
-    ax_rms.set_xlabel('RMS Values', fontsize=12)
-    ax_rms.set_ylabel('Frequency', fontsize=12)
-    ax_rms.set_title('Distribution of RMS Values', fontsize=14, fontweight='bold')
-    ax_rms.grid(True, alpha=0.3)
-    ax_rms.axvline(rms_np.mean(), color='red', linestyle='--', linewidth=2, label=f'Mean: {rms_np.mean():.4f}')
-    plt.legend()
-    plt.tight_layout()
-    if save_dir:
-        save_path = os.path.join(save_dir, f"2_rms_distribution.png")
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"  - 保存: {save_path}")
-        plt.close(fig_rms)
-    else:
-        plt.show()
-    
-    print(f"  - rms 统计: min={rms.min().float().item():.4f}, max={rms.max().float().item():.4f}, mean={rms.mean().float().item():.4f}")
-    
-    sink_scores = torch.max(torch.abs(sink_vals) / rms, dim=-1).values
-    print(f"  - sink_scores shape: {sink_scores.shape}")
+    print(f"  - sink_scores 统计: min={sink_scores.min().float().item():.4f}, max={sink_scores.max().float().item():.4f}, mean={sink_scores.mean().float().item():.4f}")
     
     # mean_score = sink_scores.mean().float().item()
     # std_score = sink_scores.std().float().item()
@@ -200,7 +136,7 @@ def visualize_sink_token_analysis(hidden_states, sink_dims, k_sigma, current_tok
     
     mean_score = sink_scores.mean().float().item()
     std_score = sink_scores.std().float().item()
-    dynamic_threshold = torch.quantile(sink_scores, 0.85).float().item()
+    dynamic_threshold = torch.quantile(sink_scores.float(), 0.85).item()
     
     sink_scores_np = sink_scores.cpu().float().numpy()
     fig_scores, axes_scores = plt.subplots(1, 2, figsize=(14, 5))
@@ -291,13 +227,12 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
     
     print(f"\n[Clean] 步骤1: 检测 Sink Tokens")
     print(f"  - hidden_states shape: {hidden_states.shape}")
-    
-    # 调用封装的可视化函数
-    dynamic_threshold, mean_score, std_score = visualize_sink_token_analysis(hidden_states, sink_dims, k_sigma, current_token, save_dir)
-    
-    # 得到一个布尔列表，True 代表是 Sink Token
-    sink_scores = torch.max(torch.abs(hidden_states[:, sink_dims]) / 
+    sink_scores = torch.max(hidden_states[:, sink_dims] / 
                            torch.sqrt(torch.mean(hidden_states ** 2, dim=-1, keepdim=True)), dim=-1).values
+    # 调用封装的可视化函数，传入已经计算好的 sink_scores
+    dynamic_threshold, mean_score, std_score = visualize_sink_token_analysis(sink_scores, k_sigma, current_token, save_dir)
+    
+    # 得到一个布尔列表，True 代表是 Sink Toke
     
     # is_sink_token = sink_scores >= dynamic_threshold  # shape: [seq_len]
     # sink_indices = torch.where(is_sink_token)[0].tolist()
@@ -869,7 +804,7 @@ def main():
                     sink_dims=[458, 2570],
                     k_sigma=3.0,
                     bad_head_threshold=0.5,
-                    save_dir='./save'
+                    save_dir=r'./save'
                 )
                 
                 print("="*60 + "\n")
