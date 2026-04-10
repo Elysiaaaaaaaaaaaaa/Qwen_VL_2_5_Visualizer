@@ -883,6 +883,7 @@ def main():
                 
                 print("\n" + "="*60)
                 print("应用 Sink Token 注意力清洗")
+                print("vision_token_ranges:", state.current_processor.vision_token_ranges['image'])
                 print("="*60)
                 
                 # 清洗注意力数据
