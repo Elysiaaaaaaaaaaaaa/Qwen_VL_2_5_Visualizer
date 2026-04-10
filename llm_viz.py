@@ -883,7 +883,9 @@ def main():
                 
                 print("\n" + "="*60)
                 print("应用 Sink Token 注意力清洗")
-                print("vision_token_ranges:", state.current_processor.vision_token_ranges['image'])
+                ranges = state.current_processor.vision_token_ranges['image']
+                print("vision_token_ranges 数量:", len(ranges))
+                print("vision_token_ranges 前3个:", ranges[:3])
                 print("="*60)
                 
                 # 清洗注意力数据
