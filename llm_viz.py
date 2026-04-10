@@ -17,6 +17,98 @@ import config
 from config import CACHE_DIR
 
 
+def detect_sink_tokens_by_quantile(sink_scores: torch.Tensor, quantile_threshold: float = 0.85) -> tuple:
+    """
+    基于分位数阈值检测 Sink Tokens
+    
+    根据 LeCun 团队 2026 年研究 "The Spike, the Sparse and the Sink":
+    Sink Tokens 是那些具有异常高 sink scores 的 token，它们会过度吸引注意力，
+    导致模型忽略其他重要信息。本函数通过设定分位数阈值（默认 Top 15%）来识别这些 token。
+    
+    算法逻辑:
+    1. 计算 sink scores 的指定分位数作为阈值
+    2. 将 score 高于阈值的 token 标记为 Sink Token
+    3. 返回 Sink Token 的布尔掩码和索引列表
+    
+    Args:
+        sink_scores: Sink scores 张量，形状为 [seq_len]
+        quantile_threshold: 分位数阈值，默认 0.85（即选择 Top 15% 作为 Sink Tokens）
+    
+    Returns:
+        tuple: (is_sink_token, sink_indices, threshold_value)
+            - is_sink_token: 布尔掩码张量，形状 [seq_len]，True 表示是 Sink Token
+            - sink_indices: Sink Token 的索引列表
+            - threshold_value: 实际使用的分位数阈值
+    """
+    threshold_value = torch.quantile(sink_scores.float(), quantile_threshold)
+    is_sink_token = sink_scores >= threshold_value
+    sink_indices = torch.where(is_sink_token)[0].tolist()
+    
+    return is_sink_token, sink_indices, threshold_value.item()
+
+
+def detect_sink_tokens_by_std(sink_scores: torch.Tensor, k_sigma: float = 3.0) -> tuple:
+    """
+    基于均值+K倍标准差检测 Sink Tokens
+    
+    使用统计学中的异常值检测方法：将阈值设为均值加上 K 倍标准差，
+    高于此阈值的 token 被视为具有异常高 sink scores 的 Sink Tokens。
+    
+    算法逻辑:
+    1. 计算 sink scores 的均值和标准差
+    2. 阈值 = 均值 + k_sigma * 标准差
+    3. 将 score 高于阈值的 token 标记为 Sink Token
+    
+    Args:
+        sink_scores: Sink scores 张量，形状为 [seq_len]
+        k_sigma: 标准差倍数，默认 3.0（统计学常用的异常值检测阈值）
+    
+    Returns:
+        tuple: (is_sink_token, sink_indices, threshold_value, mean_score, std_score)
+            - is_sink_token: 布尔掩码张量，形状 [seq_len]，True 表示是 Sink Token
+            - sink_indices: Sink Token 的索引列表
+            - threshold_value: 计算得到的动态阈值 (mean + k_sigma * std)
+            - mean_score: sink scores 的均值
+            - std_score: sink scores 的标准差
+    """
+    mean_score = sink_scores.mean().float().item()
+    std_score = sink_scores.std().float().item()
+    threshold_value = mean_score + k_sigma * std_score
+    
+    is_sink_token = sink_scores >= threshold_value
+    sink_indices = torch.where(is_sink_token)[0].tolist()
+    
+    return is_sink_token, sink_indices, threshold_value, mean_score, std_score
+
+
+def detect_sink_tokens_by_tau(sink_scores: torch.Tensor, tau: float = 20.0) -> tuple:
+    """
+    基于绝对阈值检测 Sink Tokens
+    
+    直接使用预设的绝对阈值 tau 来判定 Sink Tokens，
+    适用于 sink scores 具有明确物理意义或经验阈值已知的情况。
+    
+    算法逻辑:
+    1. 设定绝对阈值 tau
+    2. 将 score 直接大于 tau 的 token 标记为 Sink Token
+    
+    Args:
+        sink_scores: Sink scores 张量，形状为 [seq_len]
+        tau: 绝对阈值，默认 20.0（经验值，可根据实际数据调整）
+    
+    Returns:
+        tuple: (is_sink_token, sink_indices, threshold_value)
+            - is_sink_token: 布尔掩码张量，形状 [seq_len]，True 表示是 Sink Token
+            - sink_indices: Sink Token 的索引列表
+            - threshold_value: 使用的绝对阈值 tau
+    """
+    threshold_value = tau
+    is_sink_token = sink_scores >= threshold_value
+    sink_indices = torch.where(is_sink_token)[0].tolist()
+    
+    return is_sink_token, sink_indices, threshold_value
+
+
 def visualize_distribution(data, title, xlabel, ylabel="Frequency", color="steelblue", show_stats=True, **kwargs):
     """
     可视化数据分布的辅助函数
@@ -237,9 +329,7 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
     # is_sink_token = sink_scores >= dynamic_threshold  # shape: [seq_len]
     # sink_indices = torch.where(is_sink_token)[0].tolist()
     
-    threshold_85_percentile = torch.quantile(sink_scores.float(), 0.85)
-    is_sink_token = sink_scores >= threshold_85_percentile  # shape: [seq_len]
-    sink_indices = torch.where(is_sink_token)[0].tolist()
+    is_sink_token, sink_indices, threshold_85_percentile = detect_sink_tokens_by_tau(sink_scores, tau=20.0)
     
     print(f"\n[Clean] Sink Token 检测结果:")
     # print(f"  - 检测到 {len(sink_indices)} 个 Sink Tokens (动态阈值: {dynamic_threshold:.4f} = {mean_score:.4f} + {k_sigma}*{std_score:.4f})")
