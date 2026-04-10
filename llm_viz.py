@@ -237,7 +237,7 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
     # is_sink_token = sink_scores >= dynamic_threshold  # shape: [seq_len]
     # sink_indices = torch.where(is_sink_token)[0].tolist()
     
-    threshold_85_percentile = torch.quantile(sink_scores, 0.85)
+    threshold_85_percentile = torch.quantile(sink_scores.float(), 0.85)
     is_sink_token = sink_scores >= threshold_85_percentile  # shape: [seq_len]
     sink_indices = torch.where(is_sink_token)[0].tolist()
     
