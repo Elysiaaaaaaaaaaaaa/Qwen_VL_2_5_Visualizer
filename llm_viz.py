@@ -514,8 +514,6 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
     is_sink_token, sink_indices, threshold_85_percentile = detect_sink_tokens_by_tau(sink_scores, tau=20.0)
     
     print(f"\n[Clean] Sink Token 检测结果:")
-    # print(f"  - 检测到 {len(sink_indices)} 个 Sink Tokens (动态阈值: {dynamic_threshold:.4f} = {mean_score:.4f} + {k_sigma}*{std_score:.4f})")
-    print(f"  - 检测到 {len(sink_indices)} 个 Sink Tokens (Top 15% 阈值: {threshold_85_percentile:.4f})")
     if len(sink_indices) > 0:
         print(f"  - Sink Token 位置: {sink_indices[:20]}{'...' if len(sink_indices) > 20 else ''}")
         # 打印每个 sink token 的 score
@@ -1032,8 +1030,9 @@ def main():
                 print(f"[Clean-Call] token_idx={token_idx+input_len}, last_token_idx={last_token_idx+input_len}, is_last_generated_token={token_idx == last_token_idx}")
                 print(f"[Clean-Call] token_text='{state.current_tokens[token_idx]}'")
                 # 使用最后一个层的 hidden state 来检测 sink tokens
-                last_layer_idx = max(state.hidden_state.keys())
-                hidden_state_for_cleaning = state.hidden_state[last_layer_idx]
+                # last_layer_idx = max(state.hidden_state.keys())
+                first_layer_idx = min(state.hidden_state.keys())
+                hidden_state_for_cleaning = state.hidden_state[first_layer_idx]
                 
                 print("\n" + "="*60)
                 print("应用 Sink Token 注意力清洗")
