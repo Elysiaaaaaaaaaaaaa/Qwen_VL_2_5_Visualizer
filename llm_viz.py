@@ -1,4 +1,5 @@
 import argparse
+import copy
 import cv2
 import numpy as np
 from PIL import Image
@@ -1025,26 +1026,29 @@ def main():
     # 遍历指定的token
     for token_idx in token_indices_to_visualize:
         # print(f"Visualizing attention for token {token_idx}: {state.current_tokens[token_idx]}")
-         # 4.5 应用 Sink Token 注意力清洗
+        token_selector = f"Token {token_idx}: '{state.current_tokens[token_idx]}'"
+        did_dual_heatmap = False
+
+        # 4.5 应用 Sink Token 注意力清洗，并同时导出「未清洗 / 已清洗」两张热力图
         if state.current_attention and state.hidden_state:
             try:
                 print(f"[Clean-Call] token_idx={token_idx+input_len}, last_token_idx={last_token_idx+input_len}, is_last_generated_token={token_idx == last_token_idx}")
                 print(f"[Clean-Call] token_text='{state.current_tokens[token_idx]}'")
-                # 使用最后一个层的 hidden state 来检测 sink tokens
-                # last_layer_idx = max(state.hidden_state.keys())
                 first_layer_idx = min(state.hidden_state.keys())
                 hidden_state_for_cleaning = state.hidden_state[first_layer_idx]
-                
+
                 print("\n" + "="*60)
                 print("应用 Sink Token 注意力清洗")
                 ranges = state.current_processor.vision_token_ranges['image']
                 print("vision_token_ranges 数量:", len(ranges))
                 print("vision_token_ranges 前3个:", ranges[:3])
                 print("="*60)
-                
+
                 current_token_key = token_idx + input_len
                 vision_token_ranges = state.current_processor.vision_token_ranges if state.current_processor else None
-                
+
+                attention_before_split = copy.deepcopy(state.current_attention)
+
                 print("\n[Pre-process] 提取 vision token 注意力部分...")
                 vision_attention_dict, other_attention_dict, vision_indices, original_info = extract_vision_attention(
                     attention_dict=state.current_attention,
@@ -1052,15 +1056,17 @@ def main():
                     current_token=current_token_key
                 )
                 print(f"[Pre-process] 提取完成: vision_indices 数量 = {len(vision_indices)}")
-                
+
                 if not vision_indices:
                     print("[Warning] 未找到 vision token，跳过清洗")
                     continue
-                
+
+                vision_clean = copy.deepcopy(vision_attention_dict)
+
                 print("\n[Clean] 开始清洗 vision token 注意力...")
-                cleaned_vision_attention = clean_attention_dict(
+                vision_clean = clean_attention_dict(
                     current_token=current_token_key,
-                    attention_dict=vision_attention_dict,
+                    attention_dict=vision_clean,
                     hidden_states=hidden_state_for_cleaning,
                     vision_token_ranges=vision_token_ranges,
                     sink_dims=[458, 2570],
@@ -1068,64 +1074,91 @@ def main():
                     bad_head_threshold=0.5,
                     save_dir=r'./save'
                 )
-                
-                print("\n[Post-process] 拼接回完整的注意力矩阵...")
-                state.current_attention = merge_attention_back(
-                    vision_attention_dict=cleaned_vision_attention,
+
+                print("\n[Post-process] 拼接清洗后的 vision 注意力回完整矩阵...")
+                merged_clean = merge_attention_back(
+                    vision_attention_dict=vision_clean,
                     other_attention_dict=other_attention_dict,
                     vision_indices=vision_indices,
                     current_token=current_token_key,
                     original_info=original_info
                 )
                 print("[Post-process] 拼接完成")
-                
+
+                layer_name = "Mean (All Layers)"
+                for merged_attn, headline, suffix in (
+                    (attention_before_split, "has not clean", "not_clean"),
+                    (merged_clean, "has clean sink token", "clean_sink"),
+                ):
+                    state.current_attention = merged_attn
+                    attention_maps = visualize_token_attention(
+                        token_selector=token_selector,
+                        aggregation_method=args.aggregation_method,
+                        colormap=args.colormap,
+                        alpha=args.alpha
+                    )
+                    if attention_maps is None or layer_name not in attention_maps:
+                        print(f"No attention maps for token {token_idx} ({suffix})")
+                        continue
+                    attention_map = attention_maps[layer_name]
+                    if suffix == "clean_sink":
+                        all_attention_maps.append(attention_map)
+
+                    heatmap_overlay = visualizer.create_heatmap_overlay(
+                        state.current_image,
+                        attention_map
+                    )
+                    cv_img = cv2.cvtColor(np.array(heatmap_overlay), cv2.COLOR_RGB2BGR)
+                    cv2.putText(cv_img, headline, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                    subtitle = f"Token {token_idx}: {state.current_tokens[token_idx]} - {layer_name}"
+                    cv2.putText(cv_img, subtitle, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                    pil_img = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
+                    save_path = os.path.join(save_dir, f"token_{token_idx}_heatmap_{suffix}.png")
+                    try:
+                        pil_img.save(save_path)
+                        print(f"热力图已保存: {save_path}")
+                    except Exception as e:
+                        print(f"保存热力图失败: {save_path}")
+                        print(f"Error: {str(e)}")
+
+                state.current_attention = merged_clean
+                did_dual_heatmap = True
+                all_massive_dims = analyze_all_layers_massive_activations(state, top_k=5)
                 print("="*60 + "\n")
-                
+
             except Exception as e:
                 print(f"[Warning] Sink Token 清洗失败: {e}")
                 import traceback
                 traceback.print_exc()
-        # 创建token选择器字符串
-        token_selector = f"Token {token_idx}: '{state.current_tokens[token_idx]}'"
-        
-        # 获取注意力图
+
+        if did_dual_heatmap:
+            continue
+
         attention_maps = visualize_token_attention(
             token_selector=token_selector,
             aggregation_method=args.aggregation_method,
             colormap=args.colormap,
             alpha=args.alpha
         )
-        
+
         if attention_maps is None:
             print(f"No attention maps found for token {token_idx}")
             continue
-        # 分析隐藏状态中的 Massive Activations
         all_massive_dims = analyze_all_layers_massive_activations(state, top_k=5)
-        # 只显示模型整体对图片的注意力（Mean (All Layers)）
         if "Mean (All Layers)" in attention_maps:
             layer_name = "Mean (All Layers)"
             attention_map = attention_maps[layer_name]
-            
-            # 收集注意力图
             all_attention_maps.append(attention_map)
-            
-            # 创建热力图叠加
+
             heatmap_overlay = visualizer.create_heatmap_overlay(
                 state.current_image,
                 attention_map
             )
-            
-            # 转换PIL图像为OpenCV格式
             cv_img = cv2.cvtColor(np.array(heatmap_overlay), cv2.COLOR_RGB2BGR)
-            
-            # 添加标题
-            title = f"Token {token_idx}: {state.current_tokens[token_idx]} - {layer_name}"
-            cv2.putText(cv_img, title, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            
-            # 将OpenCV格式转换回PIL图像
+            cv2.putText(cv_img, "has not clean", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            subtitle = f"Token {token_idx}: {state.current_tokens[token_idx]} - {layer_name}"
+            cv2.putText(cv_img, subtitle, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             pil_img = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
-            
-            # 保存热力图到./save目录
             save_path = os.path.join(save_dir, f"token_{token_idx}_heatmap.png")
             try:
                 pil_img.save(save_path)
@@ -1133,20 +1166,7 @@ def main():
             except Exception as e:
                 print(f"保存热力图失败: {save_path}")
                 print(f"Error: {str(e)}")
-            
-            # # 显示图像
-            # cv2.imshow("Attention Heatmap", cv_img)
-            
-            # # 等待按键
-            # key = cv2.waitKey(0)
-            # if key == 27:  # ESC键退出
-            #     cv2.destroyAllWindows()
-            #     return
-            # elif key == ord('q'):  # 'q'键退出
-            #     cv2.destroyAllWindows()
-            #     return
         else:
-            # print("No Mean (All Layers) attention map found")
             pass
     
     # 保存所有token的平均注意力热力图
