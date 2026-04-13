@@ -268,13 +268,195 @@ def visualize_sink_token_analysis(sink_scores, k_sigma, current_token=None, save
     return dynamic_threshold, mean_score, std_score
 
 
+def extract_vision_attention(attention_dict, vision_token_ranges, current_token):
+    """
+    从 attention_dict 中提取 vision token 相关的注意力部分
+    
+    Args:
+        attention_dict: 完整的注意力字典 {step_key: {layer_idx: {head_idx: attn_matrix}}}
+        vision_token_ranges: Dictionary with 'image' and 'video' token ranges
+        current_token: 当前 token 索引
+        
+    Returns:
+        vision_attention_dict: 只包含 vision token 行的注意力字典（深拷贝，保留原始结构）
+        other_attention_dict: 包含非 vision token 行的注意力字典（用于后续拼接）
+        vision_indices: vision token 的索引列表
+        original_info: 原始信息，用于后续恢复（数据类型、其他step等）
+    """
+    import copy
+    
+    vision_attention_dict = {}
+    other_attention_dict = {}
+    
+    if current_token not in attention_dict:
+        print(f"[Warning] current_token {current_token} 不在 attention_dict 中")
+        return attention_dict, {}, [], {}
+    
+    # 深拷贝原始字典，保留所有 step 和原始数据
+    vision_attention_dict = copy.deepcopy(attention_dict)
+    other_attention_dict[current_token] = {}
+    
+    layers = attention_dict[current_token]
+    
+    vision_token_positions = set()
+    if vision_token_ranges:
+        for start, end in vision_token_ranges.get('image', []):
+            vision_token_positions.update(range(start, end))
+    
+    vision_indices = sorted(list(vision_token_positions))
+    
+    if not vision_indices:
+        print("[Warning] 未找到 vision token 位置，返回原始 attention_dict")
+        return attention_dict, {}, [], {}
+    
+    # 记录原始信息用于后续恢复
+    original_info = {
+        'current_token': current_token,
+        'vision_indices': vision_indices,
+        'tensor_types': {}  # 记录每个 head 的原始数据类型
+    }
+    
+    for layer_idx, heads_dict in layers.items():
+        other_attention_dict[current_token][layer_idx] = {}
+        original_info['tensor_types'][layer_idx] = {}
+        
+        for head_idx, attn_matrix in heads_dict.items():
+            # 记录原始数据类型
+            is_tensor = isinstance(attn_matrix, torch.Tensor)
+            original_info['tensor_types'][layer_idx][head_idx] = is_tensor
+            
+            # 转换为 numpy 进行处理
+            if is_tensor:
+                attn_matrix_np = attn_matrix.cpu().float().numpy()
+            else:
+                attn_matrix_np = attn_matrix
+            
+            if attn_matrix_np.shape[0] == 1:
+                vision_attn = attn_matrix_np.copy()
+                other_attn = None
+            else:
+                seq_len = attn_matrix_np.shape[0]
+                valid_vision_indices = [i for i in vision_indices if i < seq_len]
+                
+                if not valid_vision_indices:
+                    vision_attn = attn_matrix_np.copy()
+                    other_attn = None
+                else:
+                    all_indices = set(range(seq_len))
+                    other_indices = sorted(list(all_indices - set(valid_vision_indices)))
+                    
+                    vision_attn = attn_matrix_np[valid_vision_indices, :]
+                    
+                    if other_indices:
+                        other_attn = attn_matrix_np[other_indices, :]
+                    else:
+                        other_attn = None
+            
+            # 更新 vision_attention_dict 中的值为提取后的 vision 部分
+            vision_attention_dict[current_token][layer_idx][head_idx] = vision_attn
+            
+            if other_attn is not None:
+                other_attention_dict[current_token][layer_idx][head_idx] = {
+                    'attn': other_attn,
+                    'indices': other_indices,
+                    'original_shape': attn_matrix_np.shape
+                }
+    
+    return vision_attention_dict, other_attention_dict, vision_indices, original_info
+
+
+def merge_attention_back(vision_attention_dict, other_attention_dict, vision_indices, current_token, original_info):
+    """
+    将清洗后的 vision token 注意力与其他 token 注意力拼接回去
+    
+    Args:
+        vision_attention_dict: 清洗后的 vision token 注意力字典（包含所有 step 的深拷贝）
+        other_attention_dict: 其他 token 的注意力字典
+        vision_indices: vision token 的索引列表
+        current_token: 当前 token 索引
+        original_info: 原始信息，包含数据类型等
+        
+    Returns:
+        merged_attention_dict: 合并后的完整注意力字典，结构和数据类型与原始一致
+    """
+    import copy
+    import torch
+    
+    # 从 vision_attention_dict 开始（已经是深拷贝，包含所有 step）
+    merged_attention_dict = vision_attention_dict
+    
+    if current_token not in merged_attention_dict:
+        return merged_attention_dict
+    
+    other_layers = other_attention_dict.get(current_token, {})
+    tensor_types = original_info.get('tensor_types', {})
+    
+    for layer_idx, vision_heads in merged_attention_dict[current_token].items():
+        other_heads = other_layers.get(layer_idx, {})
+        layer_tensor_types = tensor_types.get(layer_idx, {})
+        
+        for head_idx, vision_attn in vision_heads.items():
+            if head_idx in other_heads:
+                other_data = other_heads[head_idx]
+                other_attn = other_data['attn']
+                other_indices = other_data['indices']
+                original_shape = other_data.get('original_shape', None)
+                
+                # 确保都是 numpy 数组进行拼接
+                if isinstance(vision_attn, torch.Tensor):
+                    vision_attn_np = vision_attn.cpu().float().numpy()
+                else:
+                    vision_attn_np = vision_attn
+                
+                if isinstance(other_attn, torch.Tensor):
+                    other_attn_np = other_attn.cpu().float().numpy()
+                else:
+                    other_attn_np = other_attn
+                
+                # 计算总序列长度
+                if original_shape is not None:
+                    total_seq_len = original_shape[0]
+                else:
+                    total_seq_len = len(vision_indices) + len(other_indices)
+                
+                # 创建合并后的矩阵
+                merged_attn = np.zeros((total_seq_len, vision_attn_np.shape[1]), dtype=vision_attn_np.dtype)
+                
+                # 将 vision 部分放回原位置
+                for i, idx in enumerate(vision_indices):
+                    if idx < total_seq_len and i < vision_attn_np.shape[0]:
+                        merged_attn[idx, :] = vision_attn_np[i, :]
+                
+                # 将其他部分放回原位置
+                for i, idx in enumerate(other_indices):
+                    if idx < total_seq_len and i < other_attn_np.shape[0]:
+                        merged_attn[idx, :] = other_attn_np[i, :]
+                
+                # 恢复原始数据类型
+                was_tensor = layer_tensor_types.get(head_idx, False)
+                if was_tensor:
+                    merged_attn = torch.from_numpy(merged_attn)
+                
+                merged_attention_dict[current_token][layer_idx][head_idx] = merged_attn
+            else:
+                # 没有 other 部分，但需要恢复原始数据类型
+                was_tensor = layer_tensor_types.get(head_idx, False)
+                if was_tensor and not isinstance(vision_attn, torch.Tensor):
+                    merged_attention_dict[current_token][layer_idx][head_idx] = torch.from_numpy(vision_attn)
+    
+    return merged_attention_dict
+
+
 def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None, sink_dims=[458, 2570], bad_head_threshold=0.5, current_token=None, k_sigma=3.0, save_dir=None):
     """
     通过hidden_state计算得到sink token的索引
     处理注意力字典，移除被sink token影响的注意头
     
+    注意：此函数现在期望接收已经过 extract_vision_attention 处理的 attention_dict，
+    即只包含 vision token 行的注意力矩阵
+    
     Args:
-        attention_dict: Dictionary containing attention weights
+        attention_dict: Dictionary containing attention weights (vision token only)
         hidden_states: Hidden states of the model
         vision_token_ranges: Dictionary with 'image' and 'video' token ranges
         sink_dims: Sink token dimensions
@@ -372,48 +554,20 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
         
         bad_heads = []
         
-        # 构建所有 vision token 位置的集合
-        vision_token_positions = set()
-        if vision_token_ranges:
-            for start, end in vision_token_ranges.get('image', []):
-                vision_token_positions.update(range(start, end))
-        
-        # 如果没有提供 vision_token_ranges，使用默认值（前256个）
-        if not vision_token_positions:
-            print("    [Warning] 未提供 vision_token_ranges，使用默认值（前256个tokens）")
-            vision_token_positions = set(range(min(256, seq_len)))
-        
-        print(f"    - Vision Token 位置数量: {len(vision_token_positions)}")
-        if vision_token_positions:
-            vision_list = sorted(list(vision_token_positions))[:10]
-            print(f"    - Vision Token 位置示例: {vision_list}{'...' if len(vision_token_positions) > 10 else ''}")
-        
-        # 使用实际的 vision token 位置作为 Query
-        vision_query_indices = sorted([i for i in vision_token_positions if i < seq_len])
-        
-        if not vision_query_indices:
-            print("    [Warning] 没有有效的 vision query indices，跳过此层")
-            continue
-        
-        print(f"    - 有效的 Vision Query 数量: {len(vision_query_indices)}")
+        print(f"    - 注意力矩阵已经是 vision token 行（预处理后）")
         
         for head_idx, attn_matrix in heads_dict.items():
             total_heads_checked += 1
             
-            # 统一转换为 numpy 数组处理
             if isinstance(attn_matrix, torch.Tensor):
                 attn_matrix_np = attn_matrix.cpu().float().numpy()
             else:
                 attn_matrix_np = attn_matrix
             
-            # attn_matrix shape: [seq_len, seq_len]
-            # 我们关注的是：作为 Query 的图像 Token，是否把注意力给了 Sink
-            
-            # 提取 vision tokens 作为 Query 的注意力
-            if attn_matrix_np.shape[0]!=1:
-                query_attn = attn_matrix_np[vision_query_indices, :seq_len] # [num_vision, seq_len]
+            if attn_matrix_np.shape[0] == 1:
+                query_attn = attn_matrix_np[0, :seq_len]
             else:
-                query_attn = attn_matrix_np[0, :seq_len] # [seq_len]
+                query_attn = attn_matrix_np[:, :seq_len]
             
             print(f"    - Query 注意力形状: {query_attn.shape}")
             
@@ -888,17 +1042,42 @@ def main():
                 print("vision_token_ranges 前3个:", ranges[:3])
                 print("="*60)
                 
-                # 清洗注意力数据
-                state.current_attention = clean_attention_dict(
-                    current_token = token_idx + input_len,
+                current_token_key = token_idx + input_len
+                vision_token_ranges = state.current_processor.vision_token_ranges if state.current_processor else None
+                
+                print("\n[Pre-process] 提取 vision token 注意力部分...")
+                vision_attention_dict, other_attention_dict, vision_indices, original_info = extract_vision_attention(
                     attention_dict=state.current_attention,
+                    vision_token_ranges=vision_token_ranges,
+                    current_token=current_token_key
+                )
+                print(f"[Pre-process] 提取完成: vision_indices 数量 = {len(vision_indices)}")
+                
+                if not vision_indices:
+                    print("[Warning] 未找到 vision token，跳过清洗")
+                    continue
+                
+                print("\n[Clean] 开始清洗 vision token 注意力...")
+                cleaned_vision_attention = clean_attention_dict(
+                    current_token=current_token_key,
+                    attention_dict=vision_attention_dict,
                     hidden_states=hidden_state_for_cleaning,
-                    vision_token_ranges=state.current_processor.vision_token_ranges if state.current_processor else None,
+                    vision_token_ranges=vision_token_ranges,
                     sink_dims=[458, 2570],
                     k_sigma=3.0,
                     bad_head_threshold=0.5,
                     save_dir=r'./save'
                 )
+                
+                print("\n[Post-process] 拼接回完整的注意力矩阵...")
+                state.current_attention = merge_attention_back(
+                    vision_attention_dict=cleaned_vision_attention,
+                    other_attention_dict=other_attention_dict,
+                    vision_indices=vision_indices,
+                    current_token=current_token_key,
+                    original_info=original_info
+                )
+                print("[Post-process] 拼接完成")
                 
                 print("="*60 + "\n")
                 
