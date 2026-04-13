@@ -539,8 +539,9 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
         sample_head_key = next(iter(heads_dict))
         sample_attn = heads_dict[sample_head_key]
         
-        # 统一处理：获取序列长度
+        # 统一处理：获取输入序列长度
         seq_len = current_token-49
+        print(f"    - 输入序列长度: {attention_dict[min(attention_dict.keys())].shape[1]}")
         
         print(f"    - 序列长度: {seq_len}")
         print(f"    - 注意力矩阵形状: {sample_attn.shape}")
