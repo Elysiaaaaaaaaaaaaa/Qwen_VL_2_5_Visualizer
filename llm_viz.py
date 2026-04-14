@@ -1071,7 +1071,7 @@ def main():
                     vision_token_ranges=vision_token_ranges,
                     sink_dims=[458, 2570],
                     k_sigma=3.0,
-                    bad_head_threshold=0.5,
+                    bad_head_threshold=0.8,
                     save_dir=r'./save'
                 )
 
