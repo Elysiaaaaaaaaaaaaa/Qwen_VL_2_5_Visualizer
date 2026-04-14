@@ -448,7 +448,134 @@ def merge_attention_back(vision_attention_dict, other_attention_dict, vision_ind
     return merged_attention_dict
 
 
-def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None, sink_dims=[458, 2570], bad_head_threshold=0.5, current_token=None, k_sigma=3.0, save_dir=None):
+def _vision_key_positions(vision_token_ranges, seq_len: int):
+    """所有图像/视频 vision token 的 key 位置（列索引），限制在 [0, seq_len)。"""
+    positions = set()
+    if not vision_token_ranges:
+        return sorted(positions)
+    for start, end in vision_token_ranges.get("image", []):
+        for i in range(int(start), int(end)):
+            if 0 <= i < seq_len:
+                positions.add(i)
+    for start, end in vision_token_ranges.get("video", []):
+        for i in range(int(start), int(end)):
+            if 0 <= i < seq_len:
+                positions.add(i)
+    return sorted(positions)
+
+
+def build_mean_vision_attention_1d(processor, step_attention, absolute_token_position, aggregation_method):
+    """
+    对每层先聚合 head，得到该层 query->vision 的 1D 向量，再对层做平均。
+    用于与 2D patch map 互补的数值差分（未经过 create_attention_map 的归一化）。
+    """
+    if processor is None or step_attention is None:
+        return None
+    available_layers = sorted(step_attention.keys())
+    vecs = []
+    for layer_idx in available_layers:
+        heads = sorted(step_attention[layer_idx].keys())
+        if not heads:
+            continue
+        v = processor.get_attention_to_vision_tokens(
+            step_attention,
+            token_position=absolute_token_position,
+            layer_indices=[layer_idx],
+            head_indices=heads,
+            aggregation_method=str(aggregation_method).lower(),
+        )
+        if v is None:
+            continue
+        vecs.append(v.detach().cpu().float().numpy().ravel())
+    if not vecs:
+        return None
+    return np.mean(np.stack(vecs, axis=0), axis=0)
+
+
+def build_mean_all_layers_heatmap(processor, step_attention, absolute_token_position, aggregation_method, normalize: bool):
+    """
+    与 visualize_token_attention 一致：逐层用该层实际存在的 head 列表聚合，再对层求平均。
+    normalize=False 时得到未做 min-max 的 2D map，便于清洗前后数值差分。
+    """
+    if processor is None or step_attention is None:
+        return None
+    available_layers = sorted(step_attention.keys())
+    layer_maps = []
+    for layer_idx in available_layers:
+        heads = sorted(step_attention[layer_idx].keys())
+        if not heads:
+            continue
+        m = processor.get_attention_heatmap_for_token(
+            step_attention,
+            token_position=absolute_token_position,
+            layer_indices=[layer_idx],
+            head_indices=heads,
+            aggregation_method=str(aggregation_method).lower(),
+            normalize=normalize,
+        )
+        if m is not None:
+            layer_maps.append(np.asarray(m, dtype=np.float64))
+    if not layer_maps:
+        return None
+    return np.mean(layer_maps, axis=0)
+
+
+def report_heatmap_diff_stats(
+    map_before: np.ndarray,
+    map_after: np.ndarray,
+    label: str,
+    save_path: str = None,
+) -> str:
+    """计算两张热力图（同 shape）的差分统计，打印并可写入文件。"""
+    lines = [f"\n[Diff] {label}"]
+    if map_before is None or map_after is None:
+        lines.append("  (skip: one of maps is None)")
+        text = "\n".join(lines)
+        print(text)
+        return text
+    a = np.asarray(map_before, dtype=np.float64)
+    b = np.asarray(map_after, dtype=np.float64)
+    if a.shape != b.shape:
+        lines.append(f"  shape mismatch: before {a.shape} vs after {b.shape}")
+        text = "\n".join(lines)
+        print(text)
+        return text
+    diff = b - a
+    max_abs = float(np.max(np.abs(diff)))
+    mean_abs = float(np.mean(np.abs(diff)))
+    rmse = float(np.sqrt(np.mean(diff ** 2)))
+    sum_a, sum_b = float(np.sum(a)), float(np.sum(b))
+    lines.append(f"  max_abs_diff: {max_abs:.6e}")
+    lines.append(f"  mean_abs_diff: {mean_abs:.6e}")
+    lines.append(f"  rmse: {rmse:.6e}")
+    lines.append(f"  sum(before): {sum_a:.6e}  sum(after): {sum_b:.6e}")
+    if np.std(a) > 1e-12 and np.std(b) > 1e-12:
+        corr = float(np.corrcoef(a.ravel(), b.ravel())[0, 1])
+        lines.append(f"  pearson_r: {corr:.6f}")
+    else:
+        lines.append("  pearson_r: (skip: near-constant map)")
+    text = "\n".join(lines)
+    print(text)
+    if save_path:
+        try:
+            with open(save_path, "a", encoding="utf-8") as f:
+                f.write(text + "\n")
+        except OSError as e:
+            print(f"[Diff] 写入报告失败: {save_path} ({e})")
+    return text
+
+
+def clean_attention_dict(
+    attention_dict,
+    hidden_states,
+    vision_token_ranges=None,
+    sink_dims=[458, 2570],
+    bad_head_threshold=0.5,
+    current_token=None,
+    k_sigma=3.0,
+    save_dir=None,
+    sink_ratio_denominator="all_keys",
+):
     """
     通过hidden_state计算得到sink token的索引
     处理注意力字典，移除被sink token影响的注意头
@@ -465,13 +592,18 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
         current_token: Current token index
         k_sigma: 标准差倍数，用于动态计算阈值 (mean + k_sigma * std)
         save_dir: 保存可视化图片的文件夹路径，如果为None则显示图片
+        sink_ratio_denominator: 坏头 sink 占比的分母。
+            - 'all_keys': 与原先一致，分母为 query 行对所有 key 的注意力总和。
+            - 'vision_keys_only': 分母仅为「图像/视频 vision token 列」上的注意力总和，
+              更贴近热力图（只看对 vision 列的分配），避免全序列 sink 占比与可视化目标不一致。
     Returns:
         Cleaned attention dictionary
     """
-    """
-    原地修改 attention_dict，剔除被 Sink Token 吸引的坏头
-    """
-    
+    if sink_ratio_denominator not in ("all_keys", "vision_keys_only"):
+        raise ValueError(
+            f"sink_ratio_denominator must be 'all_keys' or 'vision_keys_only', got {sink_ratio_denominator!r}"
+        )
+
     print("\n" + "="*60)
     print("[Clean] 开始注意力清洗过程")
     print("="*60)
@@ -479,6 +611,7 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
     print(f"  - sink_dims: {sink_dims}")
     print(f"  - k_sigma (动态阈值倍数): {k_sigma}")
     print(f"  - bad_head_threshold (坏头阈值): {bad_head_threshold}")
+    print(f"  - sink_ratio_denominator: {sink_ratio_denominator}")
     print(f"  - vision_token_ranges: {vision_token_ranges}")
     print(f"  - current_token: {current_token} (type={type(current_token).__name__})")
 
@@ -574,12 +707,26 @@ def clean_attention_dict(attention_dict, hidden_states, vision_token_ranges=None
             # 计算给 Sink 的总注意力
             # 修复：使用 numpy 广播机制
             attn_to_sink = (query_attn * current_sink_mask).sum()
-            # 计算总注意力
-            total_attn = query_attn.sum()
-            
+
+            if sink_ratio_denominator == "vision_keys_only":
+                vkeys = _vision_key_positions(vision_token_ranges, seq_len)
+                if vkeys:
+                    vk = np.asarray(vkeys, dtype=np.int64)
+                    if query_attn.ndim == 1:
+                        total_attn = float(query_attn[vk].sum())
+                    else:
+                        total_attn = float(query_attn[:, vk].sum())
+                else:
+                    total_attn = float(query_attn.sum())
+            else:
+                total_attn = float(query_attn.sum())
+
             if total_attn > 1e-8:
                 sink_ratio = attn_to_sink / total_attn
-                print(f"      Head {head_idx}: sink_ratio={sink_ratio:.4f} ({sink_ratio:.2%})")
+                print(
+                    f"      Head {head_idx}: sink_ratio={sink_ratio:.4f} ({sink_ratio:.2%}) "
+                    f"[denom={sink_ratio_denominator}]"
+                )
                 
                 # --- 核心判断 ---
                 # 如果这个头超过阈值的精力都在看 Sink，它就是坏头
@@ -902,6 +1049,13 @@ parser.add_argument('--top_p', type=float, default=0.95, help='Top-p sampling pa
 parser.add_argument('--colormap', type=str, default='jet', help='Colormap for heatmap visualization')
 parser.add_argument('--alpha', type=float, default=0.6, help='Alpha value for heatmap overlay')
 parser.add_argument('--aggregation_method', type=str, default=config.DEFAULT_AGGREGATION, choices=['mean', 'max', 'min'], help='Method to aggregate attention heads')
+parser.add_argument(
+    '--clean_sink_ratio_denominator',
+    type=str,
+    default='all_keys',
+    choices=['all_keys', 'vision_keys_only'],
+    help="Sink 坏头判定中 sink_ratio 的分母：all_keys=全序列 key；vision_keys_only=仅图像/视频 vision 列（更贴近热力图）",
+)
 parser.add_argument('--layer_name', type=str, default=None, help='Specific layer to visualize (e.g., "Layer 0" or "Mean (All Layers)")')
 args = parser.parse_args()
 
@@ -1072,7 +1226,8 @@ def main():
                     sink_dims=[458, 2570],
                     k_sigma=3.0,
                     bad_head_threshold=0.8,
-                    save_dir=r'./save'
+                    save_dir=r'./save',
+                    sink_ratio_denominator=args.clean_sink_ratio_denominator,
                 )
 
                 print("\n[Post-process] 拼接清洗后的 vision 注意力回完整矩阵...")
@@ -1086,6 +1241,43 @@ def main():
                 print("[Post-process] 拼接完成")
 
                 layer_name = "Mean (All Layers)"
+                absolute_token_position = input_len + token_idx
+                diff_report_path = os.path.join(
+                    save_dir, f"token_{token_idx}_heatmap_diff_report.txt"
+                )
+                try:
+                    with open(diff_report_path, "w", encoding="utf-8") as df:
+                        df.write(
+                            f"token_idx={token_idx} absolute_pos={absolute_token_position}\n"
+                            f"cli_aggregation={args.aggregation_method} "
+                            f"clean_sink_ratio_denominator={args.clean_sink_ratio_denominator}\n\n"
+                        )
+                except OSError as e:
+                    print(f"[Diff] 无法创建报告文件: {diff_report_path} ({e})")
+                    diff_report_path = None
+
+                # 未归一化 Mean(All Layers) 图：用于数值差分（不受 per-map min-max 影响）
+                proc = state.current_processor
+                step_before = attention_before_split.get(current_token_key)
+                step_after = merged_clean.get(current_token_key)
+                for _, agg_m in (
+                    ("mean", "mean"),
+                    ("max", "max"),
+                ):
+                    unnorm_before = build_mean_all_layers_heatmap(
+                        proc, step_before, absolute_token_position, agg_m, normalize=False
+                    )
+                    unnorm_after = build_mean_all_layers_heatmap(
+                        proc, step_after, absolute_token_position, agg_m, normalize=False
+                    )
+                    report_heatmap_diff_stats(
+                        unnorm_before,
+                        unnorm_after,
+                        label=f"unnormalized Mean(All Layers), head_agg={agg_m}",
+                        save_path=diff_report_path,
+                    )
+
+                # 主流程：CLI 指定的聚合方式（常为 max）导出 not_clean / clean_sink
                 for merged_attn, headline, suffix in (
                     (attention_before_split, "has not clean", "not_clean"),
                     (merged_clean, "has clean sink token", "clean_sink"),
@@ -1110,7 +1302,10 @@ def main():
                     )
                     cv_img = cv2.cvtColor(np.array(heatmap_overlay), cv2.COLOR_RGB2BGR)
                     cv2.putText(cv_img, headline, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-                    subtitle = f"Token {token_idx}: {state.current_tokens[token_idx]} - {layer_name}"
+                    subtitle = (
+                        f"Token {token_idx}: {state.current_tokens[token_idx]} - {layer_name} "
+                        f"(agg={args.aggregation_method})"
+                    )
                     cv2.putText(cv_img, subtitle, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
                     pil_img = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
                     save_path = os.path.join(save_dir, f"token_{token_idx}_heatmap_{suffix}.png")
@@ -1120,6 +1315,71 @@ def main():
                     except Exception as e:
                         print(f"保存热力图失败: {save_path}")
                         print(f"Error: {str(e)}")
+
+                # 验证：固定用 mean 聚合再导出一对图，避免 max 掩盖删头效果
+                for merged_attn, headline, suffix in (
+                    (attention_before_split, "has not clean (agg=mean)", "not_clean_aggmean"),
+                    (merged_clean, "has clean sink (agg=mean)", "clean_sink_aggmean"),
+                ):
+                    state.current_attention = merged_attn
+                    attention_maps = visualize_token_attention(
+                        token_selector=token_selector,
+                        aggregation_method="mean",
+                        colormap=args.colormap,
+                        alpha=args.alpha
+                    )
+                    if attention_maps is None or layer_name not in attention_maps:
+                        print(f"No attention maps for token {token_idx} ({suffix})")
+                        continue
+                    attention_map = attention_maps[layer_name]
+                    heatmap_overlay = visualizer.create_heatmap_overlay(
+                        state.current_image,
+                        attention_map
+                    )
+                    cv_img = cv2.cvtColor(np.array(heatmap_overlay), cv2.COLOR_RGB2BGR)
+                    cv2.putText(cv_img, headline, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                    subtitle = f"Token {token_idx}: {state.current_tokens[token_idx]} - {layer_name} (agg=mean)"
+                    cv2.putText(cv_img, subtitle, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                    pil_img = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
+                    save_path = os.path.join(save_dir, f"token_{token_idx}_heatmap_{suffix}.png")
+                    try:
+                        pil_img.save(save_path)
+                        print(f"热力图已保存: {save_path}")
+                    except Exception as e:
+                        print(f"保存热力图失败: {save_path}")
+                        print(f"Error: {str(e)}")
+
+                # 归一化后的 Mean(All Layers) 差分（与叠图观感更一致）
+                for _, agg_m in (
+                    ("mean", "mean"),
+                    ("max", "max"),
+                ):
+                    norm_before = build_mean_all_layers_heatmap(
+                        proc, step_before, absolute_token_position, agg_m, normalize=True
+                    )
+                    norm_after = build_mean_all_layers_heatmap(
+                        proc, step_after, absolute_token_position, agg_m, normalize=True
+                    )
+                    report_heatmap_diff_stats(
+                        norm_before,
+                        norm_after,
+                        label=f"normalized Mean(All Layers), head_agg={agg_m}",
+                        save_path=diff_report_path,
+                    )
+
+                # 1D：对 vision token 列的聚合注意力向量（跨层平均），head 聚合用 mean
+                vec_b = build_mean_vision_attention_1d(
+                    proc, step_before, absolute_token_position, "mean"
+                )
+                vec_a = build_mean_vision_attention_1d(
+                    proc, step_after, absolute_token_position, "mean"
+                )
+                report_heatmap_diff_stats(
+                    vec_b,
+                    vec_a,
+                    label="1D mean vision attention (mean over layers, head_agg=mean)",
+                    save_path=diff_report_path,
+                )
 
                 state.current_attention = merged_clean
                 did_dual_heatmap = True
