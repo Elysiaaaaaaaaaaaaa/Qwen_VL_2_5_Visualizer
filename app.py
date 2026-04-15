@@ -388,17 +388,16 @@ def visualize_token_range_attention(
             if not available_layers:
                 continue
             
-            sample_layer = available_layers[0]
-            available_heads = sorted(step_attention[sample_layer].keys())
-            
-            # For each layer, get attention map with head aggregation
+            # 每层使用本层实际存在的 head（清洗后各层 head 集合可能不同）
             for layer_idx in available_layers:
-                # Get attention heatmap for this token and this layer
+                layer_heads = sorted(step_attention[layer_idx].keys())
+                if not layer_heads:
+                    continue
                 attention_map = state.current_processor.get_attention_heatmap_for_token(
                     step_attention,
                     token_position=absolute_token_position,
                     layer_indices=[layer_idx],  # Single layer
-                    head_indices=available_heads,  # All heads
+                    head_indices=layer_heads,
                     aggregation_method=aggregation_method.lower(),
                     normalize=True
                 )
@@ -495,12 +494,8 @@ def visualize_prompt_token_attention(
             # print("ERROR: No layers available")
             return None
         
-        sample_layer = available_layers[0]
-        available_heads = sorted(step_attention[sample_layer].keys())
-        
         print(f"Using prefill step: {prefill_step}")
         # print(f"Available layers: {available_layers}")
-        # print(f"Available heads: {available_heads}")
         
         # Collect attention maps per layer for all prompt tokens in range
         layer_attention_maps = {}
@@ -514,12 +509,14 @@ def visualize_prompt_token_attention(
             
             # For each layer, get attention map
             for layer_idx in available_layers:
-                # Get attention heatmap for this prompt token and this layer
+                layer_heads = sorted(step_attention[layer_idx].keys())
+                if not layer_heads:
+                    continue
                 attention_map = state.current_processor.get_prompt_token_attention_heatmap(
                     state.current_attention,
                     prompt_token_position=prompt_position,
                     layer_indices=[layer_idx],  # Single layer
-                    head_indices=available_heads,  # All heads
+                    head_indices=layer_heads,
                     aggregation_method=aggregation_method.lower(),
                     image_idx=0,
                     normalize=True
@@ -626,12 +623,8 @@ def visualize_token_attention(
         if not available_layers:
             # print("ERROR: No attention data available")
             return None
-        
-        sample_layer = available_layers[0]
-        available_heads = sorted(step_attention[sample_layer].keys())
-        
+
         # print(f"Available layers: {available_layers}")
-        # print(f"Available heads: {available_heads}")
 
         # Debug processor info
         # print(f"Processor info:")
@@ -647,12 +640,14 @@ def visualize_token_attention(
         # 这部分开始看不懂，state.current_processor.get_attention_heatmap_for_token
         layer_attention_maps = {}
         for layer_idx in available_layers:
-            # print(f"Getting attention heatmap for layer {layer_idx}...")
+            layer_heads = sorted(step_attention[layer_idx].keys())
+            if not layer_heads:
+                continue
             attention_map = state.current_processor.get_attention_heatmap_for_token(
                 step_attention,
                 token_position=absolute_token_position,
                 layer_indices=[layer_idx],  # Single layer
-                head_indices=available_heads,  # All heads
+                head_indices=layer_heads,
                 aggregation_method=aggregation_method.lower(),
                 normalize=True
             )
@@ -1345,16 +1340,13 @@ def visualize_attention_unified(
         if step_key in state.current_attention:
             step_attention = state.current_attention[step_key]
             available_layers = sorted(step_attention.keys())
-            sample_layer = available_layers[0] if available_layers else None
-            available_heads = sorted(step_attention[sample_layer].keys()) if sample_layer is not None else []
-            
-            # Always use "mean" for attention distribution calculation (independent of visualization aggregation)
+            # head_indices=None：每层使用其自身存在的 head，避免清洗后层间 head 集合不一致
             attention_dist = state.current_processor.get_attention_distribution(
                 step_attention,
                 token_position=absolute_token_position,
                 input_length=input_length,
                 layer_indices=available_layers,
-                head_indices=available_heads,
+                head_indices=None,
                 aggregation_method="mean"
             )
     else:
@@ -1377,16 +1369,12 @@ def visualize_attention_unified(
             
             step_attention = state.current_attention[step_key]
             available_layers = sorted(step_attention.keys())
-            sample_layer = available_layers[0] if available_layers else None
-            available_heads = sorted(step_attention[sample_layer].keys()) if sample_layer is not None else []
-            
-            # Always use "mean" for attention distribution calculation (independent of visualization aggregation)
             dist = state.current_processor.get_attention_distribution(
                 step_attention,
                 token_position=absolute_token_position,
                 input_length=input_length,
                 layer_indices=available_layers,
-                head_indices=available_heads,
+                head_indices=None,
                 aggregation_method="mean"
             )
             if dist:
@@ -2065,9 +2053,6 @@ def create_interface():
                 if prefill_step and prefill_step in state.current_attention:
                     step_attention = state.current_attention[prefill_step]
                     available_layers = sorted(step_attention.keys())
-                    sample_layer = available_layers[0] if available_layers else None
-                    available_heads = sorted(step_attention[sample_layer].keys()) if sample_layer is not None else []
-                    
                     # Calculate average distribution for selected prompt tokens
                     distributions = []
                     input_length = state.current_input_ids.shape[1]
@@ -2083,7 +2068,7 @@ def create_interface():
                             token_position=prompt_position,
                             input_length=input_length,
                             layer_indices=available_layers,
-                            head_indices=available_heads,
+                            head_indices=None,
                             aggregation_method="mean"
                         )
                         if dist:
