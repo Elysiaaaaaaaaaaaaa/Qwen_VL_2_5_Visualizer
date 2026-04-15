@@ -730,7 +730,7 @@ def clean_attention_dict(
                 
                 # --- 核心判断 ---
                 # 如果这个头超过阈值的精力都在看 Sink，它就是坏头
-                if sink_ratio < bad_head_threshold:
+                if sink_ratio > bad_head_threshold:
                     bad_heads.append((head_idx, float(sink_ratio)))
                     print(f"      [!] Head {head_idx} 被标记为坏头: sink_ratio={sink_ratio:.4f} > {bad_head_threshold}")
         
