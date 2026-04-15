@@ -736,6 +736,15 @@ def clean_attention_dict(
         
         # --- 3. 执行删除 ---
         if bad_heads:
+            # 最小改动策略：避免某层 head 被清空，至少保留 1 个 sink_ratio 最低的头
+            if len(bad_heads) >= len(heads_dict) and len(heads_dict) > 0:
+                keep_head, keep_ratio = min(bad_heads, key=lambda x: x[1])
+                print(
+                    f"\n    [保护] 本层坏头数={len(bad_heads)} 与总头数={len(heads_dict)}，"
+                    f"为避免空层，保留 Head {keep_head} (sink_ratio={keep_ratio:.2%})"
+                )
+                bad_heads = [(h, r) for h, r in bad_heads if h != keep_head]
+
             print(f"\n    执行删除: 剔除 {len(bad_heads)} 个坏头")
             for bad_head, ratio in bad_heads:
                 del heads_dict[bad_head]
