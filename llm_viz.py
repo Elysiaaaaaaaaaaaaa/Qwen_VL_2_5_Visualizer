@@ -645,7 +645,7 @@ def clean_attention_dict(
     # is_sink_token = sink_scores >= dynamic_threshold  # shape: [seq_len]
     # sink_indices = torch.where(is_sink_token)[0].tolist()
     
-    is_sink_token, sink_indices, threshold_85_percentile = detect_sink_tokens_by_tau(sink_scores, tau=-15.0)
+    is_sink_token, sink_indices, threshold_85_percentile = detect_sink_tokens_by_tau(sink_scores, tau=-20.0)
     
     print(f"\n[Clean] Sink Token 检测结果:")
     if len(sink_indices) > 0:
