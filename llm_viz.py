@@ -645,7 +645,7 @@ def clean_attention_dict(
     # is_sink_token = sink_scores >= dynamic_threshold  # shape: [seq_len]
     # sink_indices = torch.where(is_sink_token)[0].tolist()
     
-    is_sink_token, sink_indices, threshold_85_percentile = detect_sink_tokens_by_tau(sink_scores, tau=-10.0)
+    is_sink_token, sink_indices, threshold_85_percentile = detect_sink_tokens_by_tau(sink_scores, tau=-15.0)
     
     print(f"\n[Clean] Sink Token 检测结果:")
     if len(sink_indices) > 0:
@@ -730,7 +730,7 @@ def clean_attention_dict(
                 
                 # --- 核心判断 ---
                 # 如果这个头超过阈值的精力都在看 Sink，它就是坏头
-                if sink_ratio > bad_head_threshold:
+                if sink_ratio < bad_head_threshold:
                     bad_heads.append((head_idx, float(sink_ratio)))
                     print(f"      [!] Head {head_idx} 被标记为坏头: sink_ratio={sink_ratio:.4f} > {bad_head_threshold}")
         
