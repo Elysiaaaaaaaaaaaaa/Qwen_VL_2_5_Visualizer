@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import copy
 import cv2
 import numpy as np
@@ -569,12 +569,15 @@ def clean_attention_dict(
     attention_dict,
     hidden_states,
     vision_token_ranges=None,
-    sink_dims=[458, 2570],
+    sink_dims=None,
     bad_head_threshold=0.5,
     current_token=None,
     k_sigma=3.0,
     save_dir=None,
     sink_ratio_denominator="all_keys",
+    rho=0.8,
+    use_paper_method=True,
+    vision_attn_prefilter=0.2,
 ):
     """
     通过hidden_state计算得到sink token的索引
@@ -596,6 +599,9 @@ def clean_attention_dict(
             - 'all_keys': 与原先一致，分母为 query 行对所有 key 的注意力总和。
             - 'vision_keys_only': 分母仅为「图像/视频 vision token 列」上的注意力总和，
               更贴近热力图（只看对 vision 列的分配），避免全序列 sink 占比与可视化目标不一致。
+        rho: 论文方法中的 visual non-sink ratio 阈值
+        use_paper_method: True 使用论文方法；False 使用兼容的旧删坏头逻辑
+        vision_attn_prefilter: 论文 prefilter，视觉注意力总和小于该值时跳过删头
     Returns:
         Cleaned attention dictionary
     """
@@ -603,6 +609,9 @@ def clean_attention_dict(
         raise ValueError(
             f"sink_ratio_denominator must be 'all_keys' or 'vision_keys_only', got {sink_ratio_denominator!r}"
         )
+
+    if sink_dims is None:
+        sink_dims = [458, 2570]
 
     print("\n" + "="*60)
     print("[Clean] 开始注意力清洗过程")
@@ -612,6 +621,9 @@ def clean_attention_dict(
     print(f"  - k_sigma (动态阈值倍数): {k_sigma}")
     print(f"  - bad_head_threshold (坏头阈值): {bad_head_threshold}")
     print(f"  - sink_ratio_denominator: {sink_ratio_denominator}")
+    print(f"  - rho: {rho}")
+    print(f"  - use_paper_method: {use_paper_method}")
+    print(f"  - vision_attn_prefilter: {vision_attn_prefilter}")
     print(f"  - vision_token_ranges: {vision_token_ranges}")
     print(f"  - current_token: {current_token} (type={type(current_token).__name__})")
 
@@ -635,18 +647,16 @@ def clean_attention_dict(
     
     print(f"\n[Clean] 步骤1: 检测 Sink Tokens")
     print(f"  - hidden_states shape: {hidden_states.shape}")
-    sink_scores = torch.max(hidden_states[:, sink_dims] / 
-                           torch.sqrt(torch.mean(hidden_states ** 2, dim=-1, keepdim=True)), dim=-1).values
+    sink_scores = torch.max(
+        torch.abs(hidden_states[:, sink_dims])
+        / torch.sqrt(torch.mean(hidden_states ** 2, dim=-1, keepdim=True)),
+        dim=-1,
+    ).values
     # 调用封装的可视化函数，传入已经计算好的 sink_scores
     dynamic_threshold, mean_score, std_score = visualize_sink_token_analysis(sink_scores, k_sigma, current_token, save_dir)
-    
-    # 得到一个布尔列表，True 代表是 Sink Toke
-    
-    # is_sink_token = sink_scores >= dynamic_threshold  # shape: [seq_len]
-    # sink_indices = torch.where(is_sink_token)[0].tolist()
-    
-    is_sink_token, sink_indices, threshold_85_percentile = detect_sink_tokens_by_tau(sink_scores, tau=-20.0)
-    
+
+    is_sink_token, sink_indices, threshold_85_percentile = detect_sink_tokens_by_quantile(sink_scores, quantile_threshold=0.85)
+
     print(f"\n[Clean] Sink Token 检测结果:")
     if len(sink_indices) > 0:
         print(f"  - Sink Token 位置: {sink_indices[:20]}{'...' if len(sink_indices) > 20 else ''}")
@@ -654,102 +664,173 @@ def clean_attention_dict(
         for idx in sink_indices[:10]:
             print(f"    Token {idx}: sink_score = {sink_scores[idx]:.4f}")
 
+    full_seq_len = int(hidden_states.shape[0])
+    vkeys_all = _vision_key_positions(vision_token_ranges, full_seq_len)
+    is_visual_full = torch.zeros(full_seq_len, dtype=torch.bool, device=is_sink_token.device)
+    if vkeys_all:
+        vkeys_tensor = torch.as_tensor(vkeys_all, dtype=torch.long, device=is_sink_token.device)
+        is_visual_full[vkeys_tensor] = True
+
+    visual_sink_mask_bool = is_sink_token & is_visual_full
+    print(
+        f"  - visual_sink_mask: {int(visual_sink_mask_bool.sum().item())} visual sink / "
+        f"{int(is_sink_token.sum().item())} total sink"
+    )
+
     # --- 2. 遍历字典进行清洗 ---
     print(f"\n[Clean] 步骤2: 遍历注意力字典进行清洗")
-    
+
     total_removed = 0
     total_heads_checked = 0
-    
-    # for step_key, layers in attention_dict.items():
-    #     print(f"\n[Clean] 处理 Step {step_key}:")
-    #     print(f"  - 包含 {len(layers)} 个层")
-    layers = attention_dict[current_token]
-        
+
+    layers = None
+    for candidate in (current_token, str(current_token)):
+        if candidate in attention_dict:
+            layers = attention_dict[candidate]
+            break
+    if layers is None and current_token is not None:
+        try:
+            current_token_as_int = int(current_token)
+            if current_token_as_int in attention_dict:
+                layers = attention_dict[current_token_as_int]
+        except (TypeError, ValueError):
+            pass
+    if layers is None:
+        raise KeyError(f"current_token={current_token!r} not found in attention_dict keys={list(attention_dict.keys())[:10]}")
+
+    layer_order = list(layers.keys())
+    last_layer_idx = layer_order[-1] if layer_order else None
+
     for layer_idx, heads_dict in layers.items():
         print(f"\n  [Layer {layer_idx}]:")
         print(f"    - 包含 {len(heads_dict)} 个注意力头")
-        
+
         # 我们需要知道序列长度，取任意一个 head 的形状即可
         sample_head_key = next(iter(heads_dict))
         sample_attn = heads_dict[sample_head_key]
-        
+
         # 统一处理：获取输入序列长度
-        seq_len = current_token-len(attention_dict.keys())
-        print(f"    - 输入序列长度: {attention_dict[min(attention_dict.keys())][0][0].shape[1]}")
-        
+        seq_len = int(sample_attn.shape[-1])
+
         print(f"    - 序列长度: {seq_len}")
         print(f"    - 注意力矩阵形状: {sample_attn.shape}")
-        
-        # 确保 is_sink_token 长度匹配（防止 padding 差异）
+
         # 转换为 numpy 数组以便与注意力矩阵相乘
-        current_sink_mask = is_sink_token[:seq_len].cpu().float().numpy()
+        current_sink_mask = is_sink_token[:seq_len].detach().cpu().float().numpy()
+        current_is_visual_np = is_visual_full[:seq_len].detach().cpu().float().numpy()
+        current_vis_non_sink_np = (
+            is_visual_full[:seq_len] & ~visual_sink_mask_bool[:seq_len]
+        ).detach().cpu().float().numpy()
         print(f"    - Sink mask 长度: {len(current_sink_mask)}, True数量: {current_sink_mask.sum()}")
-        
+        print(
+            f"    - visual_sink 列数: {int(visual_sink_mask_bool[:seq_len].sum().item())}, "
+            f"visual_non_sink 列数: {int(current_vis_non_sink_np.sum())}"
+        )
+
         bad_heads = []
-        
+
         print(f"    - 注意力矩阵已经是 vision token 行（预处理后）")
-        
+
         for head_idx, attn_matrix in heads_dict.items():
             total_heads_checked += 1
-            
+
             if isinstance(attn_matrix, torch.Tensor):
                 attn_matrix_np = attn_matrix.cpu().float().numpy()
             else:
                 attn_matrix_np = attn_matrix
-            
+
             if attn_matrix_np.shape[0] == 1:
                 query_attn = attn_matrix_np[0, :seq_len]
             else:
                 query_attn = attn_matrix_np[:, :seq_len]
-            
-            print(f"    - Query 注意力形状: {query_attn.shape}")
-            
-            # 计算给 Sink 的总注意力
-            # 修复：使用 numpy 广播机制
-            attn_to_sink = (query_attn * current_sink_mask).sum()
 
-            if sink_ratio_denominator == "vision_keys_only":
-                vkeys = _vision_key_positions(vision_token_ranges, seq_len)
-                if vkeys:
-                    vk = np.asarray(vkeys, dtype=np.int64)
-                    if query_attn.ndim == 1:
-                        total_attn = float(query_attn[vk].sum())
+            print(f"    - Query 注意力形状: {query_attn.shape}")
+
+            if use_paper_method:
+                attn_to_visual = float((query_attn * current_is_visual_np).sum())
+                if attn_to_visual < vision_attn_prefilter:
+                    print(
+                        f"      Head {head_idx}: [prefilter skip] "
+                        f"attn_to_visual={attn_to_visual:.4f} < {vision_attn_prefilter}"
+                    )
+                    continue
+
+                attn_to_vis_non_sink = float((query_attn * current_vis_non_sink_np).sum())
+                r_non_sink = attn_to_vis_non_sink / attn_to_visual
+                print(
+                    f"      Head {head_idx}: r_non_sink={r_non_sink:.4f} ({r_non_sink:.2%}) "
+                    f"[rho={rho}]"
+                )
+
+                if r_non_sink < rho:
+                    bad_heads.append((head_idx, float(r_non_sink)))
+                    print(f"      [!] Head {head_idx} 被标记为坏头: r_non_sink={r_non_sink:.4f} < {rho}")
+            else:
+                attn_to_sink = float((query_attn * current_sink_mask).sum())
+
+                if sink_ratio_denominator == "vision_keys_only":
+                    vkeys = _vision_key_positions(vision_token_ranges, seq_len)
+                    if vkeys:
+                        vk = np.asarray(vkeys, dtype=np.int64)
+                        if query_attn.ndim == 1:
+                            total_attn = float(query_attn[vk].sum())
+                        else:
+                            total_attn = float(query_attn[:, vk].sum())
                     else:
-                        total_attn = float(query_attn[:, vk].sum())
+                        total_attn = float(query_attn.sum())
                 else:
                     total_attn = float(query_attn.sum())
-            else:
-                total_attn = float(query_attn.sum())
 
-            if total_attn > 1e-8:
-                sink_ratio = attn_to_sink / total_attn
-                print(
-                    f"      Head {head_idx}: sink_ratio={sink_ratio:.4f} ({sink_ratio:.2%}) "
-                    f"[denom={sink_ratio_denominator}]"
-                )
-                
-                # --- 核心判断 ---
-                # 如果这个头超过阈值的精力都在看 Sink，它就是坏头
-                if sink_ratio > bad_head_threshold:
-                    bad_heads.append((head_idx, float(sink_ratio)))
-                    print(f"      [!] Head {head_idx} 被标记为坏头: sink_ratio={sink_ratio:.4f} > {bad_head_threshold}")
-        
+                if total_attn > 1e-8:
+                    sink_ratio = attn_to_sink / total_attn
+                    print(
+                        f"      Head {head_idx}: sink_ratio={sink_ratio:.4f} ({sink_ratio:.2%}) "
+                        f"[denom={sink_ratio_denominator}]"
+                    )
+
+                    # --- 核心判断 ---
+                    # 如果这个头超过阈值的精力都在看 Sink，它就是坏头
+                    if sink_ratio > bad_head_threshold:
+                        bad_heads.append((head_idx, float(sink_ratio)))
+                        print(
+                            f"      [!] Head {head_idx} 被标记为坏头: "
+                            f"sink_ratio={sink_ratio:.4f} > {bad_head_threshold}"
+                        )
+
         # --- 3. 执行删除 ---
+        is_last_layer = layer_idx == last_layer_idx
+        if is_last_layer and bad_heads:
+            print(
+                f"\n    [保护] 最后一层 Layer {layer_idx} 跳过删头，"
+                f"候选坏头数量: {len(bad_heads)}"
+            )
+            continue
+
         if bad_heads:
-            # 最小改动策略：避免某层 head 被清空，至少保留 1 个 sink_ratio 最低的头
+            # 最小改动策略：避免某层 head 被清空，至少保留 1 个 sink_ratio/r_non_sink 最优的头
             if len(bad_heads) >= len(heads_dict) and len(heads_dict) > 0:
-                keep_head, keep_ratio = min(bad_heads, key=lambda x: x[1])
-                print(
-                    f"\n    [保护] 本层坏头数={len(bad_heads)} 与总头数={len(heads_dict)}，"
-                    f"为避免空层，保留 Head {keep_head} (sink_ratio={keep_ratio:.2%})"
-                )
+                if use_paper_method:
+                    keep_head, keep_metric = max(bad_heads, key=lambda x: x[1])
+                    print(
+                        f"\n    [保护] 本层坏头数={len(bad_heads)} 与总头数={len(heads_dict)}，"
+                        f"为避免空层，保留 Head {keep_head} (r_non_sink={keep_metric:.2%})"
+                    )
+                else:
+                    keep_head, keep_metric = min(bad_heads, key=lambda x: x[1])
+                    print(
+                        f"\n    [保护] 本层坏头数={len(bad_heads)} 与总头数={len(heads_dict)}，"
+                        f"为避免空层，保留 Head {keep_head} (sink_ratio={keep_metric:.2%})"
+                    )
                 bad_heads = [(h, r) for h, r in bad_heads if h != keep_head]
 
             print(f"\n    执行删除: 剔除 {len(bad_heads)} 个坏头")
             for bad_head, ratio in bad_heads:
                 del heads_dict[bad_head]
-                print(f"      - 删除 Head {bad_head}: sink_ratio={ratio:.2%}")
-            
+                if use_paper_method:
+                    print(f"      - 删除 Head {bad_head}: r_non_sink={ratio:.2%}")
+                else:
+                    print(f"      - 删除 Head {bad_head}: sink_ratio={ratio:.2%}")
+
             total_removed += len(bad_heads)
         else:
             print(f"\n    无需删除: 本层没有坏头")
@@ -1549,3 +1630,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
