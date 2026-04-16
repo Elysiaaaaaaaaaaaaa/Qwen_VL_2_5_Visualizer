@@ -656,7 +656,7 @@ def clean_attention_dict(
     # 调用封装的可视化函数，传入已经计算好的 sink_scores
     dynamic_threshold, mean_score, std_score = visualize_sink_token_analysis(sink_scores, k_sigma, current_token, save_dir)
 
-    is_sink_token, sink_indices, threshold_85_percentile = detect_sink_tokens_by_quantile(sink_scores, quantile_threshold=0.85)
+    is_sink_token, sink_indices, threshold_85_percentile = detect_sink_tokens_by_tau(sink_scores, tau=20.0)
 
     print(f"\n[Clean] Sink Token 检测结果:")
     if len(sink_indices) > 0:
