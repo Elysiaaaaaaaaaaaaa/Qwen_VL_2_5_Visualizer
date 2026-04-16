@@ -575,9 +575,9 @@ def clean_attention_dict(
     k_sigma=3.0,
     save_dir=None,
     sink_ratio_denominator="all_keys",
-    rho=0.8,
+    rho=0.5,
     use_paper_method=True,
-    vision_attn_prefilter=0.2,
+    vision_attn_prefilter=0.1,
 ):
     """
     通过hidden_state计算得到sink token的索引
