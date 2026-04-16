@@ -575,7 +575,7 @@ def clean_attention_dict(
     k_sigma=3.0,
     save_dir=None,
     sink_ratio_denominator="all_keys",
-    rho=0.6,
+    rho=0.8,
     use_paper_method=True,
     vision_attn_prefilter=0.2,
 ):
@@ -1637,6 +1637,7 @@ def main():
     #     pass
     
     # cv2.destroyAllWindows()
+    print("generate_text: ", state.generated_text)
 
 if __name__ == "__main__":
     main()
