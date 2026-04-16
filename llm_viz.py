@@ -1288,8 +1288,9 @@ def main():
             try:
                 print(f"[Clean-Call] token_idx={token_idx+input_len}, last_token_idx={last_token_idx+input_len}, is_last_generated_token={token_idx == last_token_idx}")
                 print(f"[Clean-Call] token_text='{state.current_tokens[token_idx]}'")
-                first_layer_idx = min(state.hidden_state.keys())
-                hidden_state_for_cleaning = state.hidden_state[first_layer_idx]
+                last_layer_idx = max(state.hidden_state.keys())
+                hidden_state_for_cleaning = state.hidden_state[last_layer_idx]
+                print(f"[Clean-Call] using hidden_state from layer {last_layer_idx} (last layer)")
 
                 print("\n" + "="*60)
                 print("应用 Sink Token 注意力清洗")

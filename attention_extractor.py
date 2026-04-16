@@ -107,10 +107,11 @@ class AttentionHook:
             if step == generation_step:
                 current_step_attn[head_idx] = attn
 
-        # Get the last hidden state (only one entry due to overwriting)
+        # Get the last hidden state: same step_key as attention (max seq_len = last generation step)
         last_hidden_state = None
         if self.hidden_states:
-            last_hidden_state = next(iter(self.hidden_states.values()))
+            last_step = max(self.hidden_states.keys())
+            last_hidden_state = self.hidden_states[last_step]
 
         return {
             'attention': current_step_attn,
@@ -133,12 +134,12 @@ class AttentionHook:
                 attention_dict[step] = {}
             attention_dict[step][head_idx] = attn
         
-        # Get the last hidden state (only one entry due to overwriting)
+        # Get the last hidden state: max step_key (seq_len) matches last generation step
         last_hidden_state = None
         if self.hidden_states:
-            # Get the only value in hidden_states dict
-            last_hidden_state = next(iter(self.hidden_states.values()))
-            
+            last_step = max(self.hidden_states.keys())
+            last_hidden_state = self.hidden_states[last_step]
+
         return attention_dict, last_hidden_state
 
     def increment_step(self):
