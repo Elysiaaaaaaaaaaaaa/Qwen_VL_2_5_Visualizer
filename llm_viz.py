@@ -18,20 +18,6 @@ import config
 from config import CACHE_DIR
 
 
-def _debug_ace1cd_log(payload: dict) -> None:
-    # #region agent log
-    import time
-
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug-ace1cd.log")
-    line = {"sessionId": "ace1cd", "timestamp": int(time.time() * 1000), **payload}
-    try:
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(line, ensure_ascii=False) + "\n")
-    except OSError:
-        pass
-    # #endregion
-
-
 def detect_sink_tokens_by_quantile(sink_scores: torch.Tensor, quantile_threshold: float = 0.85) -> tuple:
     """
     基于分位数阈值检测 Sink Tokens
@@ -589,7 +575,7 @@ def clean_attention_dict(
     k_sigma=3.0,
     save_dir=None,
     sink_ratio_denominator="all_keys",
-    rho=0.8,
+    rho=0.6,
     use_paper_method=True,
     vision_attn_prefilter=0.2,
 ):
@@ -713,25 +699,6 @@ def clean_attention_dict(
     if layers is None:
         raise KeyError(f"current_token={current_token!r} not found in attention_dict keys={list(attention_dict.keys())[:10]}")
 
-    max_key_len = 0
-    for _heads in layers.values():
-        _sk = next(iter(_heads))
-        max_key_len = max(max_key_len, int(_heads[_sk].shape[-1]))
-    # #region agent log
-    _debug_ace1cd_log(
-        {
-            "hypothesisId": "H1",
-            "location": "llm_viz.py:clean_attention_dict",
-            "message": "hidden_vs_attention_key_len",
-            "data": {
-                "hs_len": hs_len,
-                "max_key_len_across_heads_sample_layer": max_key_len,
-                "current_token": str(current_token),
-            },
-        }
-    )
-    # #endregion
-
     layer_order = list(layers.keys())
     last_layer_idx = layer_order[-1] if layer_order else None
 
@@ -763,27 +730,6 @@ def clean_attention_dict(
             if 0 <= j < seq_len:
                 current_is_visual_np[j] = 1.0
         current_vis_non_sink_np = current_is_visual_np * (1.0 - is_sink_np)
-
-        if layer_idx == layer_order[0]:
-            # #region agent log
-            _debug_ace1cd_log(
-                {
-                    "hypothesisId": "H2",
-                    "location": "llm_viz.py:clean_attention_dict",
-                    "message": "per_layer_mask_shapes",
-                    "data": {
-                        "layer_idx": str(layer_idx),
-                        "seq_len": seq_len,
-                        "hs_len": hs_len,
-                        "mask_lens": {
-                            "sink": len(current_sink_mask),
-                            "is_visual": len(current_is_visual_np),
-                            "vis_non_sink": len(current_vis_non_sink_np),
-                        },
-                    },
-                }
-            )
-            # #endregion
 
         print(f"    - Sink mask 长度: {len(current_sink_mask)}, True数量: {current_sink_mask.sum()}")
         print(
