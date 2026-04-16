@@ -18,6 +18,20 @@ import config
 from config import CACHE_DIR
 
 
+def _debug_ace1cd_log(payload: dict) -> None:
+    # #region agent log
+    import time
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug-ace1cd.log")
+    line = {"sessionId": "ace1cd", "timestamp": int(time.time() * 1000), **payload}
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+    # #endregion
+
+
 def detect_sink_tokens_by_quantile(sink_scores: torch.Tensor, quantile_threshold: float = 0.85) -> tuple:
     """
     基于分位数阈值检测 Sink Tokens
@@ -647,6 +661,7 @@ def clean_attention_dict(
     
     print(f"\n[Clean] 步骤1: 检测 Sink Tokens")
     print(f"  - hidden_states shape: {hidden_states.shape}")
+    hs_len = int(hidden_states.shape[0])
     sink_scores = torch.max(
         torch.abs(hidden_states[:, sink_dims])
         / torch.sqrt(torch.mean(hidden_states ** 2, dim=-1, keepdim=True)),
@@ -698,6 +713,25 @@ def clean_attention_dict(
     if layers is None:
         raise KeyError(f"current_token={current_token!r} not found in attention_dict keys={list(attention_dict.keys())[:10]}")
 
+    max_key_len = 0
+    for _heads in layers.values():
+        _sk = next(iter(_heads))
+        max_key_len = max(max_key_len, int(_heads[_sk].shape[-1]))
+    # #region agent log
+    _debug_ace1cd_log(
+        {
+            "hypothesisId": "H1",
+            "location": "llm_viz.py:clean_attention_dict",
+            "message": "hidden_vs_attention_key_len",
+            "data": {
+                "hs_len": hs_len,
+                "max_key_len_across_heads_sample_layer": max_key_len,
+                "current_token": str(current_token),
+            },
+        }
+    )
+    # #endregion
+
     layer_order = list(layers.keys())
     last_layer_idx = layer_order[-1] if layer_order else None
 
@@ -715,15 +749,45 @@ def clean_attention_dict(
         print(f"    - 序列长度: {seq_len}")
         print(f"    - 注意力矩阵形状: {sample_attn.shape}")
 
-        # 转换为 numpy 数组以便与注意力矩阵相乘
-        current_sink_mask = is_sink_token[:seq_len].detach().cpu().float().numpy()
-        current_is_visual_np = is_visual_full[:seq_len].detach().cpu().float().numpy()
-        current_vis_non_sink_np = (
-            is_visual_full[:seq_len] & ~visual_sink_mask_bool[:seq_len]
-        ).detach().cpu().float().numpy()
+        # 与 query_attn 对齐：sink 仅对 hidden_states 覆盖的前 hs_len 位有效，其余 key 位视为非 sink；
+        # 视觉位按 vision_token_ranges 在完整 seq_len 上展开（避免 hidden 较短时与注意力列数不一致）。
+        n_sink_src = min(seq_len, hs_len)
+        is_sink_np = np.zeros(seq_len, dtype=np.float64)
+        if n_sink_src > 0:
+            is_sink_np[:n_sink_src] = is_sink_token[:n_sink_src].detach().cpu().float().numpy()
+        current_sink_mask = is_sink_np
+
+        vkeys_here = _vision_key_positions(vision_token_ranges, seq_len)
+        current_is_visual_np = np.zeros(seq_len, dtype=np.float64)
+        for j in vkeys_here:
+            if 0 <= j < seq_len:
+                current_is_visual_np[j] = 1.0
+        current_vis_non_sink_np = current_is_visual_np * (1.0 - is_sink_np)
+
+        if layer_idx == layer_order[0]:
+            # #region agent log
+            _debug_ace1cd_log(
+                {
+                    "hypothesisId": "H2",
+                    "location": "llm_viz.py:clean_attention_dict",
+                    "message": "per_layer_mask_shapes",
+                    "data": {
+                        "layer_idx": str(layer_idx),
+                        "seq_len": seq_len,
+                        "hs_len": hs_len,
+                        "mask_lens": {
+                            "sink": len(current_sink_mask),
+                            "is_visual": len(current_is_visual_np),
+                            "vis_non_sink": len(current_vis_non_sink_np),
+                        },
+                    },
+                }
+            )
+            # #endregion
+
         print(f"    - Sink mask 长度: {len(current_sink_mask)}, True数量: {current_sink_mask.sum()}")
         print(
-            f"    - visual_sink 列数: {int(visual_sink_mask_bool[:seq_len].sum().item())}, "
+            f"    - visual_sink 列数: {int(np.sum(current_is_visual_np * is_sink_np))}, "
             f"visual_non_sink 列数: {int(current_vis_non_sink_np.sum())}"
         )
 
